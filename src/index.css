@@ -1,0 +1,121 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@theme {
+  --color-polar-bg: #080B0F;
+  --color-polar-surface: #11161C;
+  --color-polar-ivory: #F4F5F2;
+  --color-polar-gray: #9BA6B2;
+  --color-polar-ice: #8FD8E8;
+  --color-polar-amber: #D6B47A;
+  --font-display: 'Space Grotesk', sans-serif;
+  --font-body: 'Inter', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+}
+
+:root {
+  --polar-bg: #080B0F;
+  --polar-surface: #11161C;
+  --polar-ivory: #F4F5F2;
+  --polar-gray: #9BA6B2;
+  --polar-ice: #8FD8E8;
+  --polar-amber: #D6B47A;
+}
+
+html {
+  scroll-behavior: auto;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  background: #080B0F;
+  color: #F4F5F2;
+  font-family: 'Inter', sans-serif;
+  overflow-x: hidden;
+}
+
+::selection {
+  background: #8FD8E8;
+  color: #080B0F;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #080B0F;
+}
+::-webkit-scrollbar-thumb {
+  background: #2a3340;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3a4555;
+}
+
+.font-display {
+  font-family: 'Space Grotesk', sans-serif;
+}
+.font-mono {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.hairline {
+  border-color: rgba(155, 166, 178, 0.15);
+}
+
+.text-balance {
+  text-wrap: balance;
+}
+
+.polar-gradient-overlay {
+  background: linear-gradient(
+    180deg,
+    rgba(8, 11, 15, 0.3) 0%,
+    rgba(8, 11, 15, 0.6) 50%,
+    rgba(8, 11, 15, 0.9) 100%
+  );
+}
+
+.polar-vignette {
+  background: radial-gradient(
+    ellipse at center,
+    transparent 0%,
+    transparent 50%,
+    rgba(8, 11, 15, 0.7) 100%
+  );
+}
+
+@keyframes pulse-glow {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.8; }
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 3s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-pulse-glow {
+    animation: none;
+  }
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+.field {
+  width: 100%;
+  background: #11161C;
+  border: 1px solid rgba(255,255,255,.12);
+  color: #F4F5F2;
+  padding: .85rem .9rem;
+  outline: none;
+  font-size: .875rem;
+}
+.field:focus { border-color: rgba(143,216,232,.65); }
+.field::placeholder { color: rgba(155,166,178,.55); }
