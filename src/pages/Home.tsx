@@ -468,11 +468,10 @@ export default function Home() {
                       <div key={idx} className="relative group">
                         {/* Timeline node */}
                         <span
-                          className={`absolute -left-[17px] top-1 w-2.5 h-2.5 rounded-full border transition-all duration-300 ${
-                            isLatest
+                          className={`absolute -left-[17px] top-1 w-2.5 h-2.5 rounded-full border transition-all duration-300 ${isLatest
                               ? 'bg-[#8FD8E8] border-[#8FD8E8] shadow-[0_0_10px_#8fd8e8]'
                               : 'bg-[#080B0F] border-[#64748b] group-hover:border-[#8FD8E8] group-hover:bg-[#8FD8E8]'
-                          }`}
+                            }`}
                         />
                         <span className={`font-mono text-xs font-bold block ${isLatest ? 'text-[#8FD8E8]' : 'text-[#94a3b8]'}`}>
                           {item.year}

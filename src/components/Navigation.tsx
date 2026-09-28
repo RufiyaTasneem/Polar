@@ -50,11 +50,10 @@ export default function Navigation() {
   return (
     <>
       <header
-        className={`fixed top-0 left-0 right-0 z-50 transition-all duration-500 ${
-          scrolled || !isHome
+        className={`fixed top-0 left-0 right-0 z-50 transition-all duration-500 ${scrolled || !isHome
             ? 'bg-[#080B0F]/90 backdrop-blur-md border-b border-white/5'
             : 'bg-transparent'
-        }`}
+          }`}
       >
         <nav className="flex items-center justify-between px-6 md:px-12 h-16 md:h-20">
           <Link
@@ -77,11 +76,10 @@ export default function Navigation() {
                   key={item.path}
                   to={item.path}
                   onClick={item.path === '/' ? handleHomeClick : undefined}
-                  className={`text-xs font-medium tracking-[0.15em] transition-colors ${
-                    isActive
+                  className={`text-xs font-medium tracking-[0.15em] transition-colors ${isActive
                       ? 'text-[#8FD8E8]'
                       : 'text-[#9BA6B2] hover:text-[#F4F5F2]'
-                  }`}
+                    }`}
                 >
                   {item.label}
                 </Link>
@@ -140,11 +138,10 @@ export default function Navigation() {
                     key={item.path}
                     to={item.path}
                     onClick={item.path === '/' ? handleHomeClick : undefined}
-                    className={`px-6 py-3 text-sm font-medium tracking-[0.15em] transition-colors ${
-                      isActive
+                    className={`px-6 py-3 text-sm font-medium tracking-[0.15em] transition-colors ${isActive
                         ? 'text-[#8FD8E8]'
                         : 'text-[#9BA6B2] hover:text-[#8FD8E8]'
-                    }`}
+                      }`}
                   >
                     {item.label}
                   </Link>

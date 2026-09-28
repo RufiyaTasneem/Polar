@@ -46,13 +46,16 @@ body {
 ::-webkit-scrollbar {
   width: 6px;
 }
+
 ::-webkit-scrollbar-track {
   background: #080B0F;
 }
+
 ::-webkit-scrollbar-thumb {
   background: #2a3340;
   border-radius: 3px;
 }
+
 ::-webkit-scrollbar-thumb:hover {
   background: #3a4555;
 }
@@ -60,6 +63,7 @@ body {
 .font-display {
   font-family: 'Space Grotesk', sans-serif;
 }
+
 .font-mono {
   font-family: 'JetBrains Mono', monospace;
 }
@@ -73,26 +77,29 @@ body {
 }
 
 .polar-gradient-overlay {
-  background: linear-gradient(
-    180deg,
-    rgba(8, 11, 15, 0.3) 0%,
-    rgba(8, 11, 15, 0.6) 50%,
-    rgba(8, 11, 15, 0.9) 100%
-  );
+  background: linear-gradient(180deg,
+      rgba(8, 11, 15, 0.3) 0%,
+      rgba(8, 11, 15, 0.6) 50%,
+      rgba(8, 11, 15, 0.9) 100%);
 }
 
 .polar-vignette {
-  background: radial-gradient(
-    ellipse at center,
-    transparent 0%,
-    transparent 50%,
-    rgba(8, 11, 15, 0.7) 100%
-  );
+  background: radial-gradient(ellipse at center,
+      transparent 0%,
+      transparent 50%,
+      rgba(8, 11, 15, 0.7) 100%);
 }
 
 @keyframes pulse-glow {
-  0%, 100% { opacity: 0.4; }
-  50% { opacity: 0.8; }
+
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+
+  50% {
+    opacity: 0.8;
+  }
 }
 
 .animate-pulse-glow {
@@ -103,6 +110,7 @@ body {
   .animate-pulse-glow {
     animation: none;
   }
+
   html {
     scroll-behavior: auto;
   }
@@ -111,11 +119,17 @@ body {
 .field {
   width: 100%;
   background: #11161C;
-  border: 1px solid rgba(255,255,255,.12);
+  border: 1px solid rgba(255, 255, 255, .12);
   color: #F4F5F2;
   padding: .85rem .9rem;
   outline: none;
   font-size: .875rem;
 }
-.field:focus { border-color: rgba(143,216,232,.65); }
-.field::placeholder { color: rgba(155,166,178,.55); }
+
+.field:focus {
+  border-color: rgba(143, 216, 232, .65);
+}
+
+.field::placeholder {
+  color: rgba(155, 166, 178, .55);
+}

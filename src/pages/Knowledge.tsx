@@ -94,9 +94,8 @@ export default function Knowledge() {
                 <button
                   key={r}
                   onClick={() => toggle(activeRegions, setActiveRegions, r)}
-                  className={`block text-sm transition-colors ${
-                    activeRegions.includes(r) ? 'text-[#8FD8E8]' : 'text-[#F4F5F2]/70 hover:text-[#F4F5F2]'
-                  }`}
+                  className={`block text-sm transition-colors ${activeRegions.includes(r) ? 'text-[#8FD8E8]' : 'text-[#F4F5F2]/70 hover:text-[#F4F5F2]'
+                    }`}
                 >
                   <span className="mr-2">{activeRegions.includes(r) ? '◆' : '◇'}</span>
                   {r}
@@ -112,9 +111,8 @@ export default function Knowledge() {
                 <button
                   key={t}
                   onClick={() => toggle(activeTypes, setActiveTypes, t)}
-                  className={`block text-sm transition-colors ${
-                    activeTypes.includes(t) ? 'text-[#8FD8E8]' : 'text-[#F4F5F2]/70 hover:text-[#F4F5F2]'
-                  }`}
+                  className={`block text-sm transition-colors ${activeTypes.includes(t) ? 'text-[#8FD8E8]' : 'text-[#F4F5F2]/70 hover:text-[#F4F5F2]'
+                    }`}
                 >
                   <span className="mr-2">{activeTypes.includes(t) ? '◆' : '◇'}</span>
                   {t}
@@ -130,9 +128,8 @@ export default function Knowledge() {
                 <button
                   key={a}
                   onClick={() => toggle(activeAreas, setActiveAreas, a)}
-                  className={`block text-sm transition-colors ${
-                    activeAreas.includes(a) ? 'text-[#8FD8E8]' : 'text-[#F4F5F2]/70 hover:text-[#F4F5F2]'
-                  }`}
+                  className={`block text-sm transition-colors ${activeAreas.includes(a) ? 'text-[#8FD8E8]' : 'text-[#F4F5F2]/70 hover:text-[#F4F5F2]'
+                    }`}
                 >
                   <span className="mr-2">{activeAreas.includes(a) ? '◆' : '◇'}</span>
                   {a}

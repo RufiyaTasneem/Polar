@@ -154,11 +154,10 @@ export default function ScientificDataExplorer() {
                   <button
                     key={s}
                     onClick={() => setSelectedStation(s)}
-                    className={`w-full text-left font-mono text-xs px-3 py-1.5 rounded-xs transition-colors flex items-center justify-between ${
-                      selectedStation.toLowerCase() === s.toLowerCase()
+                    className={`w-full text-left font-mono text-xs px-3 py-1.5 rounded-xs transition-colors flex items-center justify-between ${selectedStation.toLowerCase() === s.toLowerCase()
                         ? 'bg-[#8FD8E8]/15 border border-[#8FD8E8]/40 text-[#8FD8E8] font-bold'
                         : 'text-[#9BA6B2] hover:bg-white/5 hover:text-white'
-                    }`}
+                      }`}
                   >
                     <span>{s}</span>
                     {s !== 'All' && (
@@ -181,11 +180,10 @@ export default function ScientificDataExplorer() {
                   <button
                     key={r}
                     onClick={() => setSelectedRegion(r)}
-                    className={`w-full text-left font-mono text-xs px-3 py-1.5 rounded-xs transition-colors ${
-                      selectedRegion.toLowerCase() === r.toLowerCase()
+                    className={`w-full text-left font-mono text-xs px-3 py-1.5 rounded-xs transition-colors ${selectedRegion.toLowerCase() === r.toLowerCase()
                         ? 'bg-[#8FD8E8]/15 border border-[#8FD8E8]/40 text-[#8FD8E8] font-bold'
                         : 'text-[#9BA6B2] hover:bg-white/5 hover:text-white'
-                    }`}
+                      }`}
                   >
                     {r}
                   </button>
@@ -203,11 +201,10 @@ export default function ScientificDataExplorer() {
                   <button
                     key={d}
                     onClick={() => setSelectedDomain(d)}
-                    className={`w-full text-left font-mono text-xs px-3 py-1.5 rounded-xs transition-colors ${
-                      selectedDomain.toLowerCase() === d.toLowerCase()
+                    className={`w-full text-left font-mono text-xs px-3 py-1.5 rounded-xs transition-colors ${selectedDomain.toLowerCase() === d.toLowerCase()
                         ? 'bg-[#8FD8E8]/15 border border-[#8FD8E8]/40 text-[#8FD8E8] font-bold'
                         : 'text-[#9BA6B2] hover:bg-white/5 hover:text-white'
-                    }`}
+                      }`}
                   >
                     {d}
                   </button>
@@ -225,11 +222,10 @@ export default function ScientificDataExplorer() {
                   <button
                     key={t}
                     onClick={() => setSelectedType(t)}
-                    className={`w-full text-left font-mono text-xs px-3 py-1.5 rounded-xs transition-colors ${
-                      selectedType.toLowerCase() === t.toLowerCase()
+                    className={`w-full text-left font-mono text-xs px-3 py-1.5 rounded-xs transition-colors ${selectedType.toLowerCase() === t.toLowerCase()
                         ? 'bg-[#8FD8E8]/15 border border-[#8FD8E8]/40 text-[#8FD8E8] font-bold'
                         : 'text-[#9BA6B2] hover:bg-white/5 hover:text-white'
-                    }`}
+                      }`}
                   >
                     {t}
                   </button>
