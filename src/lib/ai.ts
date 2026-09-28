@@ -1,4 +1,5 @@
 import type { Document } from './types';
+import scientificMLResults from './scientificMLResults.json';
 
 // AI abstraction layer — supports external LLM API via environment variable,
 // with a deterministic demo fallback using seeded knowledge base.
@@ -13,9 +14,29 @@ export type AISource = {
   excerpt: string;
 };
 
+export type ScientificMLCardData = {
+  datasetName: string;
+  station: string;
+  target: string;
+  targetDescription: string;
+  trainingPeriod: string;
+  testingPeriod: string;
+  trainSampleCount: number;
+  testSampleCount: number;
+  totalValidSamples: number;
+  r2Score: number;
+  mae: number;
+  rmse: number;
+  topFeatures: { name: string; importance: number }[];
+  algorithm: string;
+  datasetRoute: string;
+  sourceAttribution: string;
+};
+
 export type AIResponse = {
   answer: string;
   sources: AISource[];
+  scientificML?: ScientificMLCardData;
 };
 
 export type ContentType =
@@ -117,10 +138,123 @@ function generateDemoAnswer(query: string, docs: Document[]): AIResponse {
   return { answer, sources };
 }
 
+export function isScientificMLQuery(query: string): boolean {
+  const q = query.toLowerCase();
+  const directTerms = [
+    'maitri temperature ml',
+    'maitri temperature prediction',
+    'maitri temperature model',
+    'random forest',
+    'scientific ml',
+    'ml model',
+    'maitri ml',
+    'temperature model',
+    'weather model',
+    'temperature prediction',
+    'sase model',
+    'sankalp model',
+    'forecasting model',
+    'predict temperature',
+    'ml accuracy',
+    'r2 score',
+    'explained variance',
+    'dataset audit',
+  ];
+  if (directTerms.some((term) => q.includes(term))) return true;
+
+  const mentionsStationOrTemp =
+    q.includes('maitri') ||
+    q.includes('temperature') ||
+    q.includes('weather') ||
+    q.includes('sase') ||
+    q.includes('sankalp');
+  const mentionsML =
+    q.includes('ml') ||
+    q.includes('model') ||
+    q.includes('predict') ||
+    q.includes('forecast') ||
+    q.includes('forest') ||
+    q.includes('r2') ||
+    q.includes('r^2') ||
+    q.includes('accuracy') ||
+    q.includes('train') ||
+    q.includes('regression') ||
+    q.includes('evaluat');
+
+  return mentionsStationOrTemp && mentionsML;
+}
+
+function getScientificMLResponse(): AIResponse {
+  const rawImportances = scientificMLResults.feature_importances as Record<string, number>;
+  const topFeatures = Object.entries(rawImportances)
+    .slice(0, 5)
+    .map(([name, importance]) => ({ name, importance: Number(importance) }));
+
+  const scientificML: ScientificMLCardData = {
+    datasetName: scientificMLResults.dataset_name,
+    station: scientificMLResults.station,
+    target: scientificMLResults.target,
+    targetDescription: scientificMLResults.target_description,
+    trainingPeriod: scientificMLResults.training_period,
+    testingPeriod: scientificMLResults.testing_period,
+    trainSampleCount: scientificMLResults.train_sample_count,
+    testSampleCount: scientificMLResults.test_sample_count,
+    totalValidSamples: scientificMLResults.total_valid_samples,
+    r2Score: scientificMLResults.r2_score,
+    mae: scientificMLResults.mae,
+    rmse: scientificMLResults.rmse,
+    topFeatures,
+    algorithm: scientificMLResults.model_parameters.algorithm,
+    datasetRoute: '/knowledge/data/maitri-sankalp-sase-meteorology',
+    sourceAttribution: 'National Polar Data Centre (NCPOR) — Maitri scientific dataset',
+  };
+
+  const answer = `SCIENTIFIC INTELLIGENCE REPORT: Maitri Station Temperature Prediction Model
+
+Evaluation results for the trained Random Forest Regressor on the Maitri SASE SANKALP meteorological observation series:
+
+• Target Variable: Ambient Air Temperature (tempr in °C)
+• Model Algorithm: RandomForestRegressor (n_estimators=100, max_depth=15, random_state=42)
+• Training Chronological Period: 2006–2013 (${scientificMLResults.train_sample_count.toLocaleString()} valid hourly samples)
+• Independent Test Period: 2014–2015 (${scientificMLResults.test_sample_count.toLocaleString()} valid hourly samples)
+• Total Processed Observations: ${scientificMLResults.total_valid_samples.toLocaleString()} clean hourly weather readings
+
+Model Performance Metrics:
+- Explained variance (R²): ${scientificMLResults.r2_score.toFixed(4)}
+- Mean absolute error: ${scientificMLResults.mae.toFixed(4)} °C
+- Root mean squared error: ${scientificMLResults.rmse.toFixed(4)} °C
+
+Top Contributing Predictor Variables:
+1. ${topFeatures[0]?.name}: ${(topFeatures[0]?.importance * 100).toFixed(1)}% (Cos-encoded monthly solar cycle)
+2. ${topFeatures[1]?.name}: ${(topFeatures[1]?.importance * 100).toFixed(1)}% (Day-of-year position)
+3. ${topFeatures[2]?.name}: ${(topFeatures[2]?.importance * 100).toFixed(1)}% (Wind speed in m/s)
+4. ${topFeatures[3]?.name}: ${(topFeatures[3]?.importance * 100).toFixed(1)}% (Relative humidity %)
+5. ${topFeatures[4]?.name}: ${(topFeatures[4]?.importance * 100).toFixed(1)}% (Sin-encoded monthly cycle)`;
+
+  return {
+    answer,
+    sources: [
+      {
+        documentSlug: 'maitri-sankalp-sase-meteorology',
+        title: 'Maitri SASE Automatic Weather Station (SASE SANKALP)',
+        page: 'Scientific ML Model Evaluation',
+        excerpt: `RandomForestRegressor evaluation on 79,967 observations. R² = ${scientificMLResults.r2_score}, MAE = ${scientificMLResults.mae} °C.`,
+      },
+    ],
+    scientificML,
+  };
+}
+
 export async function askPolarAI(
   query: string,
   allDocs: Document[]
 ): Promise<AIResponse> {
+  // Check for Scientific ML query intent first
+  if (isScientificMLQuery(query)) {
+    await new Promise((r) => setTimeout(r, 400));
+    return getScientificMLResponse();
+  }
+
   // Try external AI if configured
   if (AI_ENDPOINT && AI_API_KEY) {
     try {
