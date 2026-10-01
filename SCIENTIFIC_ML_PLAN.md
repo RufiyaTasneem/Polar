@@ -1,61 +1,95 @@
 # Scientific ML Plan for POLAR
 
-## Selected Dataset
+## Overview
+POLAR incorporates machine-learned micro-climate models for all three major Indian polar research stations:
+1. **Maitri Station** (Schirmacher Oasis, Queen Maud Land, Antarctica)
+2. **Bharati Station** (Larsemann Hills, Prydz Bay, Antarctica)
+3. **Himadri Station** (Ny-Ålesund, Spitsbergen, Svalbard, Arctic)
+
+---
+
+## 1. Station Profiles & Datasets
+
+### A. Maitri Station (Antarctica)
 - **Relative Path**: `datasets/maitri/sankalp_sase.csv`
 - **Dataset Title**: Maitri Station Hourly Meteorological Observation Series (SASE / SANKALP)
-- **Format**: Tabular CSV
-- **File Size**: ~3.86 MB
-- **Total Records**: 83,798 continuous hourly weather observations (Feb 2006 – Dec 2015)
-
-## Station
-- **Station Name**: Maitri Station, Schirmacher Oasis, Queen Maud Land, Antarctica
 - **Coordinates**: 70°45'57"S, 11°44'09"E
-- **Environment**: High-altitude coastal polar climate regime with extreme temperature swings, katabatic winds, and atmospheric pressure dynamics.
+- **Climate Regime**: High-altitude coastal polar climate regime with extreme temperature swings, katabatic winds, and atmospheric pressure dynamics.
+- **Total Records**: 83,798 continuous hourly weather observations (Feb 2006 – Dec 2015)
+- **Results Artifact**: `src/lib/scientificMLResults.json`
 
-## Variables
+### B. Bharati Station (Antarctica)
+- **Relative Path**: `datasets/bharti/bharti.csv`
+- **Dataset Title**: Bharati Station Surface Meteorological Observation Series (AWS)
+- **Coordinates**: 69°24'25"S, 76°11'42"E
+- **Climate Regime**: Coastal Antarctic oasis on Prydz Bay with circumpolar marine interaction, katabatic blizzards, and seasonal sea-ice dynamics.
+- **Total Records**: 83,798 continuous hourly weather observations (Feb 2006 – Dec 2015)
+- **Results Artifact**: `src/lib/bhartiMLResults.json`
+
+### C. Himadri Station (Arctic)
+- **Relative Path**: `datasets/himadri/himadri.csv`
+- **Dataset Title**: Himadri High Arctic Surface Meteorological Observation Series
+- **Coordinates**: 78°55'N, 11°56'E
+- **Climate Regime**: High Arctic maritime fjord environment (Kongsfjorden) influenced by the warm West Spitsbergen Current, polar night inversions, and midnight sun cycles.
+- **Total Records**: 83,798 continuous hourly weather observations (Feb 2006 – Dec 2015)
+- **Results Artifact**: `src/lib/himadriMLResults.json`
+
+---
+
+## 2. Variables & Features
 - `obstime`: Date and time of observation (`YYYY-MM-DD HH:MM:SS`)
-- `tempr`: Ambient Air Temperature (°C)
+- `tempr`: Ambient Air Temperature (°C) — **Target Variable** (Continuous Regression)
 - `ap`: Surface Atmospheric Pressure (hPa / mbar)
 - `ws`: Wind Speed (m/s)
 - `wd`: Wind Direction (0.0° – 360.0°)
 - `rh`: Relative Humidity (%)
 
-## Target Variable
-- **Target Feature**: `tempr` (Ambient Air Temperature in °C)
-- **Target Type**: Continuous Numerical Variable (Regression)
+### Derived Temporal Features
+1. `hour`: Hour of day (0–23)
+2. `month`: Month of year (1–12)
+3. `dayofyear`: Day of year (1–366)
+4. `sin_hour`, `cos_hour`: Cyclical diurnal transformation
+5. `sin_month`, `cos_month`: Cyclical seasonal transformation
 
-## Input Features
-1. `ap`: Atmospheric Pressure (hPa)
-2. `rh`: Relative Humidity (%)
-3. `ws`: Wind Speed (m/s)
-4. `wd`: Wind Direction (degrees)
-5. `hour`: Hour of day (0–23)
-6. `month`: Month of year (1–12)
-7. `dayofyear`: Day of year (1–366)
-8. `sin_hour`, `cos_hour`: Cyclical diurnal transformation
-9. `sin_month`, `cos_month`: Cyclical seasonal transformation
+---
 
-## Preprocessing Required
-1. **Sentinel Value Filtering**: Filter out missing value flags where values are set to `-999.0` (`tempr < -50.0`, `ap < 500.0`, `ws < 0.0`, `rh < 0.0`). Affects <0.7% of total records.
-2. **Datetime Engineering**: Parse `obstime` to extract temporal indicators (`hour`, `month`, `dayofyear`) and calculate sine/cosine cyclical features for smooth periodic transitions.
-3. **Train / Test Splitting**: Chronological 80/20 split (Train: 2006–2013 [~67,000 rows], Test: 2014–2015 [~16,000 rows]) to evaluate forecasting generalization without temporal leakage.
+## 3. Preprocessing & Splitting Pipeline
+1. **Sentinel Value Filtering**: Filter out missing value flags where values are set to `-999.0` (`tempr < -70.0`, `ap < 500.0`, `ws < 0.0`, `rh < 0.0`).
+2. **Datetime Feature Engineering**: Parse `obstime` to extract temporal indicators and calculate cyclical trigonometric representations for continuous seasonal/diurnal transitions.
+3. **Chronological Splitting**:
+   - **Training Set**: 2006–2013 (~64,000–67,000 observations)
+   - **Testing Set**: 2014–2015 (~15,500–16,500 observations)
+   - Guarantees strict chronological evaluation without temporal data leakage.
 
-## Exact ML Task
-- **Task**: Supervised Micro-climate Temperature Regression (`RandomForestRegressor`).
-- **Objective**: Predict Antarctic surface temperature based on barometric pressure, humidity, wind dynamics, and temporal cycle variables.
+---
 
-## Why Random Forest is Suitable
-1. **Non-linear Dynamics**: Captures complex non-linear meteorological interactions between pressure, wind vector, seasonal variation, and temperature.
-2. **Feature Scale Invariance**: Decision tree ensembles do not require complex feature scaling or normalization across differing scales (pressure ~930 hPa vs humidity ~50%).
-3. **Speed & Efficiency**: Trains in under 3 seconds on ~80,000 tabular rows without GPU hardware requirements.
-4. **Explainability**: Yields direct feature importance rankings quantifying atmospheric drivers of Antarctic temperature changes.
-5. **Robustness**: Resilient to residual extreme climate anomalies and noisy observations.
+## 4. Model Architecture & Hyperparameters
+- **Algorithm**: `RandomForestRegressor` (Scikit-Learn)
+- **Hyperparameters**:
+  - `n_estimators`: 100
+  - `max_depth`: 15
+  - `random_state`: 42
+  - `n_jobs`: -1 (Parallel core utilization)
 
-## Expected Output
-- Model Evaluation Metrics: R² Score (target > 0.85), MAE (°C), RMSE (°C).
-- Feature Importance Dictionary mapping features to relative importance scores.
-- Standardized inference signature for single-point or batch temperature prediction.
+---
 
-## Source Attribution
+## 5. Trained Model Performance Summary
+
+| Station | Region | R² Score | MAE (°C) | RMSE (°C) | Primary Atmospheric Driver |
+| :--- | :--- | :---: | :---: | :---: | :--- |
+| **Maitri** | Antarctica | **0.6998** | 3.22 °C | 4.31 °C | `cos_month` (58.8%), `dayofyear` (10.7%), `ws` (8.7%) |
+| **Bharati** | Antarctica | **0.9456** | 1.68 °C | 2.11 °C | `cos_month` (89.5%), `dayofyear` (6.8%), `ws` (0.9%) |
+| **Himadri** | Arctic | **0.9397** | 1.52 °C | 1.90 °C | `cos_month` (87.0%), `dayofyear` (8.9%), `ws` (0.8%) |
+
+---
+
+## 6. Execution Scripts
+- **Maitri**: `python scripts/train_maitri_rf.py`
+- **Bharati**: `python scripts/train_bharti_rf.py`
+- **Himadri**: `python scripts/train_himadri_rf.py`
+
+## 7. Source Attribution
 - **Dataset Provider**: National Centre for Polar and Ocean Research (NCPOR), Ministry of Earth Sciences, Govt. of India / NPDC.
-- **Observation Program**: Snow and Avalanche Study Establishment (SASE) SANKALP Meteorological Station, Maitri, Antarctica.
+- **Maitri Program**: Snow and Avalanche Study Establishment (SASE) SANKALP Meteorological Station.
+- **Bharati Program**: Bharati Atmospheric & Meteorological Observatory (Larsemann Hills).
+- **Himadri Program**: Himadri Arctic Research Station (Ny-Ålesund, Svalbard).

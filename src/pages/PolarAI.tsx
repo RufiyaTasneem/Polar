@@ -6,6 +6,8 @@ import { askPolarAI, type AIResponse } from '@/lib/ai';
 
 const SUGGESTIONS = [
   'Maitri temperature ML prediction model',
+  'Bharati temperature ML prediction model',
+  'Himadri temperature ML prediction model',
   'What is studied at Himadri?',
   'Tell me about Maitri station',
   'What research happens at Bharati?',
