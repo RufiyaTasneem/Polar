@@ -65,8 +65,8 @@ export default function Expeditions() {
                   key={r}
                   onClick={() => setFilterRegion(r)}
                   className={`font-mono text-xs tracking-widest px-3 py-1 transition-colors ${filterRegion === r
-                      ? 'text-[#8FD8E8] border-b border-[#8FD8E8]'
-                      : 'text-[#9BA6B2] hover:text-[#F4F5F2]'
+                    ? 'text-[#8FD8E8] border-b border-[#8FD8E8]'
+                    : 'text-[#9BA6B2] hover:text-[#F4F5F2]'
                     }`}
                 >
                   {r === 'all' ? 'ALL' : r.toUpperCase()}
@@ -82,8 +82,8 @@ export default function Expeditions() {
                   key={s}
                   onClick={() => setFilterStation(s)}
                   className={`font-mono text-xs tracking-widest px-3 py-1 transition-colors ${filterStation === s
-                      ? 'text-[#8FD8E8] border-b border-[#8FD8E8]'
-                      : 'text-[#9BA6B2] hover:text-[#F4F5F2]'
+                    ? 'text-[#8FD8E8] border-b border-[#8FD8E8]'
+                    : 'text-[#9BA6B2] hover:text-[#F4F5F2]'
                     }`}
                 >
                   {s === 'all' ? 'ALL' : s.toUpperCase()}

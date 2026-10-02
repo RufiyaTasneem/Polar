@@ -1,7 +1,22 @@
-import { FormEvent, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
+
 import { Link } from 'react-router-dom';
-import { ArrowRight, Bot, Cpu, ExternalLink, Send, Sparkles } from 'lucide-react';
-import { useDocuments } from '@/lib/hooks';
+
+import {
+  ArrowRight,
+  Bot,
+  Cpu,
+  ExternalLink,
+  Send,
+  Sparkles,
+} from 'lucide-react';
+
+import {
+  useDocuments,
+  useExpeditions,
+  useStations,
+} from '@/lib/hooks';
+
 import { askPolarAI, type AIResponse } from '@/lib/ai';
 
 const SUGGESTIONS = [
@@ -11,26 +26,63 @@ const SUGGESTIONS = [
   'What is studied at Himadri?',
   'Tell me about Maitri station',
   'What research happens at Bharati?',
-  'How does polar research matter to India?'
+  'How does polar research matter to India?',
 ];
 
 export default function PolarAI() {
-  const { data: documents } = useDocuments();
+  const { data: documents, loading: documentsLoading } = useDocuments();
+  const { data: expeditions, loading: expeditionsLoading } = useExpeditions();
+  const { data: stations, loading: stationsLoading } = useStations();
+  const sourceDataLoading =
+    documentsLoading || expeditionsLoading || stationsLoading;
+
   const [query, setQuery] = useState('');
   const [response, setResponse] = useState<AIResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const pendingSourceQuery = useRef<string | null>(null);
 
-  async function handleAsk(targetQuery?: string) {
-    const q = (targetQuery || query).trim();
-    if (!q || loading) return;
-    if (targetQuery) setQuery(targetQuery);
+  const executeAsk = useCallback(async (q: string) => {
     setLoading(true);
+
     try {
-      const res = await askPolarAI(q, documents);
-      setResponse(res);
+      const result = await askPolarAI(
+        q,
+        documents,
+        expeditions,
+        stations
+      );
+      setResponse(result);
+
+      if (result.sources.length && pendingSourceQuery.current === q) {
+        pendingSourceQuery.current = null;
+      }
     } finally {
       setLoading(false);
     }
+  }, [documents, expeditions, stations]);
+
+  useEffect(() => {
+    if (sourceDataLoading || loading || !pendingSourceQuery.current) return;
+
+    const pendingQuery = pendingSourceQuery.current;
+    pendingSourceQuery.current = null;
+    void executeAsk(pendingQuery);
+  }, [executeAsk, loading, sourceDataLoading]);
+
+  async function handleAsk(targetQuery?: string) {
+    const q = (targetQuery || query).trim();
+
+    if (!q || loading) return;
+
+    if (sourceDataLoading) {
+      pendingSourceQuery.current = q;
+    }
+
+    if (targetQuery) {
+      setQuery(targetQuery);
+    }
+
+    await executeAsk(q);
   }
 
   function submit(e: FormEvent) {
@@ -100,7 +152,7 @@ export default function PolarAI() {
 
                 <div className="mb-6">
                   <h3 className="font-display font-bold text-2xl md:text-3xl text-[#F4F5F2]">
-                    {response.scientificML.station} — Temperature Model
+                    {response.scientificML.station}, {response.scientificML.region} — Temperature Prediction
                   </h3>
                   <p className="text-sm font-mono text-[#8FD8E8] mt-1">
                     {response.scientificML.algorithm} (Supervised Machine Learning)
@@ -135,14 +187,14 @@ export default function PolarAI() {
                   <div>
                     <p className="font-mono text-xs text-[#8FD8E8] uppercase tracking-widest mb-2.5">Top Contributing Variables</p>
                     <div className="space-y-2 bg-[#11161C]/60 p-3 border border-white/5">
-                      {response.scientificML.topFeatures.map((feat) => (
-                        <div key={feat.name} className="flex items-center justify-between text-xs font-mono">
-                          <span className="text-[#F4F5F2]">{feat.name}</span>
+                      {response.scientificML.topFeatures.map((feature) => (
+                        <div key={feature.name} className="flex items-center justify-between text-xs font-mono">
+                          <span className="text-[#F4F5F2]">{feature.name}</span>
                           <div className="flex items-center gap-2">
                             <div className="w-24 bg-white/10 h-1.5 overflow-hidden">
-                              <div className="bg-[#8FD8E8] h-full" style={{ width: `${Math.round(feat.importance * 100)}%` }} />
+                              <div className="bg-[#8FD8E8] h-full" style={{ width: `${Math.round(feature.importance * 100)}%` }} />
                             </div>
-                            <span className="text-[#9BA6B2] text-[11px] w-10 text-right">{(feat.importance * 100).toFixed(1)}%</span>
+                            <span className="text-[#9BA6B2] text-[11px] w-10 text-right">{(feature.importance * 100).toFixed(1)}%</span>
                           </div>
                         </div>
                       ))}
@@ -179,8 +231,8 @@ export default function PolarAI() {
                   {response.sources.length ? (
                     response.sources.map((source) => (
                       <Link
-                        key={source.documentSlug}
-                        to={`/knowledge/${source.documentSlug}`}
+                        key={source.route || source.documentSlug}
+                        to={source.route || `/knowledge/${source.documentSlug}`}
                         className="block border-t border-white/10 pt-4 hover:border-[#8FD8E8]/60 transition-colors group"
                       >
                         <p className="text-sm font-display text-[#F4F5F2] group-hover:text-[#8FD8E8] transition-colors">
