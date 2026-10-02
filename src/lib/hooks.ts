@@ -141,7 +141,10 @@ export function useExpeditions() {
 
       const { data: expeditions, error } = await supabase
         .from('expeditions')
-        .select('*')
+        .select(`
+          *,
+          station:stations(*)
+        `)
         .order('year', { ascending: false });
 
       if (!mounted) return;
@@ -149,11 +152,15 @@ export function useExpeditions() {
       if (error) {
         console.error('Error fetching expeditions:', error);
         setError(error.message);
-
-        // Fallback
         setData(MOCK_EXPEDITIONS);
       } else {
-        setData(expeditions || []);
+        const safeExpeditions = (expeditions || []).map((exp) => ({
+          ...exp,
+          research_areas: exp.research_areas || [],
+          station: exp.station || null,
+        }));
+
+        setData(safeExpeditions as Expedition[]);
       }
 
       setLoading(false);
@@ -245,7 +252,11 @@ export function useDocuments() {
 
       const { data: documents, error } = await supabase
         .from('documents')
-        .select('*')
+        .select(`
+          *,
+          station:stations(*),
+          expedition:expeditions(*)
+        `)
         .order('year', { ascending: false });
 
       if (!mounted) return;
@@ -253,11 +264,18 @@ export function useDocuments() {
       if (error) {
         console.error('Error fetching documents:', error);
         setError(error.message);
-
-        // Fallback
         setData(MOCK_DOCUMENTS);
       } else {
-        setData(documents || []);
+        const safeDocuments = (documents || []).map((doc) => ({
+          ...doc,
+          research_areas: doc.research_areas || [],
+          authors: doc.authors || [],
+          tags: doc.tags || [],
+          station: doc.station || null,
+          expedition: doc.expedition || null,
+        }));
+
+        setData(safeDocuments as Document[]);
       }
 
       setLoading(false);

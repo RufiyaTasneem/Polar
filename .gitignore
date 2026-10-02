@@ -25,3 +25,10 @@ datasets/
 datasets/*
 desktop.ini
 **/desktop.ini
+.env
+backend/.env
+backend/venv/
+backend/chroma_db/
+backend/minilm/
+backend/models/
+*.pyc

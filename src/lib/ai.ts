@@ -9,6 +9,9 @@ import himadriMLResults from './himadriMLResults.json';
 const AI_ENDPOINT = import.meta.env.VITE_POLAR_AI_ENDPOINT;
 const AI_API_KEY = import.meta.env.VITE_POLAR_AI_API_KEY;
 
+const POLAR_RAG_ENDPOINT =
+  import.meta.env.VITE_POLAR_RAG_ENDPOINT || 'http://127.0.0.1:8000';
+
 export type AISource = {
   documentSlug: string;
   title: string;
@@ -299,50 +302,63 @@ export async function askPolarAI(
   query: string,
   allDocs: Document[]
 ): Promise<AIResponse> {
-  // Check for Scientific ML query intent first
+  // Keep Scientific ML queries working exactly as before
   if (isScientificMLQuery(query)) {
     await new Promise((r) => setTimeout(r, 400));
     return getScientificMLResponse(query);
   }
 
-  // Try external AI if configured
-  if (AI_ENDPOINT && AI_API_KEY) {
-    try {
-      const relevant = retrieveRelevantDocs(query, allDocs);
-      const context = relevant
-        .map((d) => `Title: ${d.title}\nAbstract: ${d.abstract || d.description}`)
-        .join('\n\n');
+  // Connect to FastAPI + ChromaDB RAG
+  try {
+    const response = await fetch(
+      `${POLAR_RAG_ENDPOINT}/api/ask?query=${encodeURIComponent(query)}`
+    );
 
-      const response = await fetch(AI_ENDPOINT, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${AI_API_KEY}`,
-        },
-        body: JSON.stringify({
-          query,
-          context,
-          sources: relevant.map((d) => ({
-            documentSlug: d.slug,
-            title: d.title,
-          })),
-        }),
-      });
+    if (response.ok) {
+      const data = await response.json();
+      const results = data.results || [];
 
-      if (response.ok) {
-        const data = await response.json();
-        if (data.answer && data.sources) {
-          return data;
-        }
+      if (results.length > 0) {
+        const sources: AISource[] = results
+          .filter(
+            (item: any) => item.metadata?.source === 'documents'
+          )
+          .map((item: any) => {
+            const matchingDoc = allDocs.find(
+              (doc) => doc.title === item.metadata?.title
+            );
+
+            return {
+              documentSlug: matchingDoc?.slug || '',
+              title: item.metadata?.title || 'POLAR Knowledge Source',
+              page: 'Repository',
+              excerpt: item.content?.substring(0, 180) + '...',
+            };
+          })
+          .filter(
+            (source: AISource) => source.documentSlug
+          );
+
+        const topResult = results[0];
+
+        return {
+          answer:
+            data.answer ||
+            topResult.content ||
+            'I found relevant information in the POLAR knowledge repository.',
+          sources,
+        };
       }
-    } catch {
-      // Fall through to demo
     }
+  } catch (error) {
+    console.error('POLAR RAG connection failed:', error);
   }
 
-  // Demo fallback — simulate async
+  // Fallback to existing local retrieval
   await new Promise((r) => setTimeout(r, 600));
+
   const relevant = retrieveRelevantDocs(query, allDocs);
+
   return generateDemoAnswer(query, relevant);
 }
 
