@@ -2,691 +2,549 @@ import type {
   Document,
   Expedition,
   Station,
-} from './types';
-import scientificMLResults from './scientificMLResults.json';
-import bhartiMLResults from './bhartiMLResults.json';
-import himadriMLResults from './himadriMLResults.json';
-
-// AI abstraction layer — supports external LLM API via environment variable,
-// with a deterministic demo fallback using seeded knowledge base.
-
-const AI_ENDPOINT = import.meta.env.VITE_POLAR_AI_ENDPOINT;
-const AI_API_KEY = import.meta.env.VITE_POLAR_AI_API_KEY;
+} from '@/lib/hooks';
 
 const POLAR_RAG_ENDPOINT =
   import.meta.env.VITE_POLAR_RAG_ENDPOINT || 'http://127.0.0.1:8000';
 
-export type AISource = {
-  documentSlug: string;
+export interface AISource {
   title: string;
-  page: string;
-  excerpt: string;
-  route?: string;
-};
+  type: string;
+  route: string;
+  documentSlug?: string;
+}
 
-export type ScientificMLCardData = {
-  datasetName: string;
-  station: string;
-  region: string;
-  modelType: string;
-  keyInsight: string;
-  target: string;
-  targetDescription: string;
-  trainingPeriod: string;
-  testingPeriod: string;
-  trainSampleCount: number;
-  testSampleCount: number;
-  totalValidSamples: number;
-  r2Score: number;
-  mae: number;
-  rmse: number;
-  topFeatures: { name: string; importance: number }[];
-  algorithm: string;
-  datasetRoute: string;
-  sourceAttribution: string;
-};
-
-export type AIResponse = {
+export interface AIResponse {
   answer: string;
   sources: AISource[];
-  scientificML?: ScientificMLCardData;
-};
-
-export type ContentType =
-  | 'Website Article'
-  | 'Instagram Caption'
-  | 'Social Media Post'
-  | 'YouTube Description'
-  | 'Short Video Script'
-  | 'Outreach Article';
-
-type FastAPISource = {
-  title?: unknown;
-  type?: unknown;
-  source_type?: unknown;
-  excerpt?: unknown;
-};
-
-type FastAPIResponse = {
-  answer?: unknown;
-  sources?: unknown;
-};
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
 }
 
-const normalizeTitle = (value: string) => value.trim().toLowerCase();
+function cleanText(value: unknown): string {
+  if (value === null || value === undefined) {
+    return '';
+  }
 
-// Keyword-based retrieval from local document set (demo RAG)
-function retrieveRelevantDocs(query: string, docs: Document[]): Document[] {
-  const q = query.toLowerCase();
-  const keywords = q.split(/\s+/).filter((w) => w.length > 3);
+  return String(value).trim();
+}
 
-  const scored = docs.map((doc) => {
-    let score = 0;
+function getExpeditionName(expedition: Expedition): string {
+  const record = expedition as Expedition & {
+    title?: string | null;
+  };
 
-    const haystack = (
-      doc.title +
-      ' ' +
-      doc.description +
-      ' ' +
-      doc.abstract +
-      ' ' +
-      (doc.tags || []).join(' ') +
-      ' ' +
-      (doc.research_areas || []).join(' ') +
-      ' ' +
-      doc.region
-    ).toLowerCase();
+  return (
+    cleanText(record.name) ||
+    cleanText(record.title) ||
+    cleanText(record.slug) ||
+    'Unnamed expedition'
+  );
+}
 
-    for (const kw of keywords) {
-      if (haystack.includes(kw)) score += 1;
+function getStationName(station: Station): string {
+  return (
+    cleanText(station.name) ||
+    cleanText(station.slug) ||
+    'Unknown station'
+  );
+}
+
+function getDocumentName(document: Document): string {
+  return (
+    cleanText(document.title) ||
+    cleanText(document.name) ||
+    cleanText(document.slug) ||
+    'Untitled document'
+  );
+}
+
+function createStationSource(station: Station): AISource {
+  const slug = cleanText(station.slug);
+
+  return {
+    title: getStationName(station),
+    type: 'Station',
+    // IMPORTANT:
+    // StationDetail is routed through /explore/:slug
+    route: slug ? `/explore/${slug}` : '/explore',
+  };
+}
+
+function createExpeditionSource(expedition: Expedition): AISource {
+  const slug = cleanText(expedition.slug);
+
+  return {
+    title: getExpeditionName(expedition),
+    type: 'Expedition',
+    route: slug ? `/expeditions/${slug}` : '/expeditions',
+  };
+}
+
+function createDocumentSource(document: Document): AISource {
+  const slug = cleanText(document.slug);
+
+  return {
+    title: getDocumentName(document),
+    type: cleanText(document.type) || 'Document',
+    route: slug ? `/knowledge/${slug}` : '/knowledge',
+    documentSlug: slug || undefined,
+  };
+}
+
+function normalizeSource(
+  source: any,
+  documents: Document[],
+  expeditions: Expedition[],
+  stations: Station[],
+): AISource | null {
+  if (!source) {
+    return null;
+  }
+
+  const title = cleanText(
+    source.title ||
+    source.name ||
+    source.document_title ||
+    source.documentName,
+  );
+
+  const slug = cleanText(
+    source.slug ||
+    source.documentSlug ||
+    source.document_slug,
+  );
+
+  const type = cleanText(
+    source.type ||
+    source.source_type ||
+    source.category,
+  );
+
+  /*
+   * If the backend already gives us a route, use it.
+   * But fix old station routes that incorrectly use /stations/:slug.
+   */
+  let route = cleanText(source.route);
+
+  if (route.startsWith('/stations/')) {
+    route = route.replace('/stations/', '/explore/');
+  }
+
+  if (!route && slug) {
+    const station = stations.find(
+      (item) =>
+        cleanText(item.slug).toLowerCase() === slug.toLowerCase(),
+    );
+
+    if (station) {
+      route = `/explore/${station.slug}`;
     }
 
-    // Boost for title match
-    if (doc.title.toLowerCase().includes(q)) score += 3;
+    const expedition = expeditions.find(
+      (item) =>
+        cleanText(item.slug).toLowerCase() === slug.toLowerCase(),
+    );
 
-    return { doc, score };
-  });
+    if (!route && expedition) {
+      route = `/expeditions/${expedition.slug}`;
+    }
 
-  scored.sort((a, b) => b.score - a.score);
+    const document = documents.find(
+      (item) =>
+        cleanText(item.slug).toLowerCase() === slug.toLowerCase(),
+    );
 
-  return scored
-    .filter((s) => s.score > 0)
-    .slice(0, 3)
-    .map((s) => s.doc);
+    if (!route && document) {
+      route = `/knowledge/${document.slug}`;
+    }
+  }
+
+  if (!route) {
+    if (type.toLowerCase().includes('station')) {
+      const station = stations.find(
+        (item) =>
+          cleanText(item.name).toLowerCase() === title.toLowerCase() ||
+          cleanText(item.slug).toLowerCase() === title.toLowerCase(),
+      );
+
+      if (station) {
+        route = `/explore/${station.slug}`;
+      }
+    }
+
+    if (
+      !route &&
+      type.toLowerCase().includes('expedition')
+    ) {
+      const expedition = expeditions.find(
+        (item) =>
+          getExpeditionName(item).toLowerCase() === title.toLowerCase() ||
+          cleanText(item.slug).toLowerCase() === title.toLowerCase(),
+      );
+
+      if (expedition) {
+        route = `/expeditions/${expedition.slug}`;
+      }
+    }
+
+    if (!route) {
+      const document = documents.find(
+        (item) =>
+          getDocumentName(item).toLowerCase() === title.toLowerCase() ||
+          cleanText(item.slug).toLowerCase() === title.toLowerCase(),
+      );
+
+      if (document) {
+        route = `/knowledge/${document.slug}`;
+      }
+    }
+  }
+
+  if (!title && !route) {
+    return null;
+  }
+
+  return {
+    title: title || 'Source',
+    type: type || 'Source',
+    route: route || '#',
+    documentSlug: slug || undefined,
+  };
 }
 
-function generateDemoAnswer(query: string, docs: Document[]): AIResponse {
-  const relevant = docs.length > 0 ? docs : [];
+function normalizeSources(
+  sources: any[],
+  documents: Document[],
+  expeditions: Expedition[],
+  stations: Station[],
+): AISource[] {
+  return sources
+    .map((source) =>
+      normalizeSource(
+        source,
+        documents,
+        expeditions,
+        stations,
+      ),
+    )
+    .filter(Boolean) as AISource[];
+}
 
-  if (relevant.length === 0) {
+function findStation(
+  query: string,
+  stations: Station[],
+): Station | null {
+  const normalizedQuery = query.toLowerCase();
+
+  return (
+    stations.find((station) => {
+      const name = cleanText(station.name).toLowerCase();
+      const slug = cleanText(station.slug).toLowerCase();
+
+      return (
+        normalizedQuery.includes(name) ||
+        normalizedQuery.includes(slug) ||
+        name.includes(normalizedQuery)
+      );
+    }) || null
+  );
+}
+
+function findExpedition(
+  query: string,
+  expeditions: Expedition[],
+): Expedition | null {
+  const normalizedQuery = query.toLowerCase();
+
+  return (
+    expeditions.find((expedition) => {
+      const name = getExpeditionName(expedition).toLowerCase();
+      const slug = cleanText(expedition.slug).toLowerCase();
+
+      return (
+        normalizedQuery.includes(name) ||
+        normalizedQuery.includes(slug) ||
+        name.includes(normalizedQuery)
+      );
+    }) || null
+  );
+}
+
+function stationExpeditionResponse(
+  query: string,
+  stations: Station[],
+  expeditions: Expedition[],
+): AIResponse | null {
+  const station = findStation(query, stations);
+
+  if (!station) {
+    return null;
+  }
+
+  const relatedExpeditions = expeditions.filter((expedition) => {
+    const stationId = cleanText(expedition.station_id);
+
+    return (
+      stationId === cleanText(station.id) ||
+      cleanText(expedition.station?.id) === cleanText(station.id) ||
+      cleanText(expedition.station?.slug) === cleanText(station.slug)
+    );
+  });
+
+  const normalizedQuery = query.toLowerCase();
+
+  const asksForExpeditions =
+    normalizedQuery.includes('expedition') ||
+    normalizedQuery.includes('expeditions') ||
+    normalizedQuery.includes('associated') ||
+    normalizedQuery.includes('conducted');
+
+  if (!asksForExpeditions) {
+    return null;
+  }
+
+  const expeditionNames = relatedExpeditions
+    .map((expedition) => {
+      const record = expedition as Expedition & {
+        title?: string | null;
+      };
+
+      return (
+        record.name ||
+        record.title ||
+        record.slug ||
+        'Unnamed expedition'
+      );
+    })
+    .filter(Boolean)
+    .join(', ');
+
+  const sources: AISource[] = [
+    createStationSource(station),
+    ...relatedExpeditions.map(createExpeditionSource),
+  ];
+
+  if (relatedExpeditions.length === 0) {
     return {
-      answer:
-        'I could not find specific information about that in the current knowledge repository. Try asking about research at Himadri, Maitri, or Bharati stations, or about Indian polar expeditions.',
-      sources: [],
+      answer: `${getStationName(
+        station,
+      )} does not currently have any expeditions associated with it in the POLAR repository.`,
+      sources: [createStationSource(station)],
     };
   }
 
-  // Build a contextual answer from the top documents
-  const top = relevant[0];
-
-  let answer = '';
-  const q = query.toLowerCase();
-
-  if (
-    q.includes('himadri') ||
-    (top.region === 'Arctic' && q.includes('arctic'))
-  ) {
-    answer = `Himadri is India's Arctic research station located in Ny-Ålesund, Svalbard, at 79°N latitude. Research at Himadri focuses on ${[
-      'climate science',
-      'atmospheric chemistry',
-      'glaciology',
-      'auroral studies',
-    ].join(', ')}. `;
-
-    if (top.abstract) {
-      answer += `According to ${top.title}, ${top.abstract.substring(0, 200)}...`;
-    }
-  } else if (q.includes('maitri') || q.includes('schirmacher')) {
-    answer = `Maitri is India's Antarctic research station in the Schirmacher Oasis, operational since 1989. Research covers ${[
-      'geology',
-      'glaciology',
-      'meteorology',
-      'biology',
-    ].join(', ')}. `;
-
-    if (top.abstract) {
-      answer += `As documented in ${top.title}, ${top.abstract.substring(0, 200)}...`;
-    }
-  } else if (q.includes('bharati') || q.includes('larsemann')) {
-    answer = `Bharati is India's newest Antarctic station, located in the Larsemann Hills since 2012. It focuses on ${[
-      'oceanography',
-      'polar biology',
-      'climate research',
-    ].join(', ')}. `;
-
-    if (top.abstract) {
-      answer += `${top.title} reports that ${top.abstract.substring(0, 200)}...`;
-    }
-  } else if (
-    q.includes('climate') ||
-    q.includes('warming') ||
-    q.includes('temperature')
-  ) {
-    answer = `Indian polar research has documented significant climate changes in both polar regions. ${top.abstract ? top.abstract.substring(0, 300) + '...' : ''
-      }`;
-  } else if (q.includes('glacier') || q.includes('ice')) {
-    answer = `Glaciological studies by Indian scientists include ice core analysis, glacier monitoring, and sea ice dynamics. ${top.abstract ? top.abstract.substring(0, 300) + '...' : ''
-      }`;
-  } else if (q.includes('expedition')) {
-    answer = `India has conducted over 40 Antarctic expeditions and 15 Arctic expeditions. ${top.description ? top.description.substring(0, 300) + '...' : ''
-      }`;
-  } else {
-    answer = top.abstract
-      ? top.abstract.substring(0, 400) + '...'
-      : top.description.substring(0, 400) + '...';
-  }
-
-  const sources: AISource[] = relevant.map((d, i) => ({
-    documentSlug: d.slug,
-    title: d.title,
-    page: i === 0 ? 'Summary' : `Page ${Math.floor(i * 15) + 12}`,
-    excerpt: (d.abstract || d.description).substring(0, 150) + '...',
-  }));
-
-  return { answer, sources };
+  return {
+    answer: `${getStationName(
+      station,
+    )} is associated with the following expeditions in the POLAR repository: ${expeditionNames}.`,
+    sources,
+  };
 }
 
-export function isScientificMLQuery(query: string): boolean {
-  const hasModelIntent =
-    /\b(?:ml|machine learning|model|predict(?:ion|ive)?|forecast(?:ing)?|random forest|regression)\b/i.test(
-      query
-    );
-  const hasPolarWeatherContext =
-    /\b(?:maitri|bharti|bharati|himadri|temperature|weather|sase|sankalp)\b/i.test(
-      query
-    );
+function localFallback(
+  query: string,
+  documents: Document[],
+  expeditions: Expedition[],
+  stations: Station[],
+): AIResponse {
+  const station = findStation(query, stations);
 
-  return hasModelIntent && hasPolarWeatherContext;
-}
+  if (station) {
+    const lowerQuery = query.toLowerCase();
 
-function getScientificMLResponse(query: string = ''): AIResponse {
-  const q = query.toLowerCase();
+    if (
+      lowerQuery.includes('research') ||
+      lowerQuery.includes('focus') ||
+      lowerQuery.includes('study')
+    ) {
+      const researchFocus = Array.isArray(station.research_focus)
+        ? station.research_focus.join(', ')
+        : cleanText(station.research_focus);
 
-  // Decide which station model to return
-  let results = scientificMLResults;
-  let datasetRoute = '/knowledge/data/maitri-sankalp-sase-meteorology';
-  let sourceDocSlug = 'maitri-sankalp-sase-meteorology';
-  let sourceDocTitle = 'Maitri SASE Automatic Weather Station (SASE SANKALP)';
-  let sourceAttribution =
-    'National Polar Data Centre (NCPOR) — Maitri scientific dataset';
+      return {
+        answer: `### ${getStationName(station)}
 
-  if (q.includes('bharti') || q.includes('bharati')) {
-    results = bhartiMLResults;
-    datasetRoute = '/knowledge/data/bharati-isea-expedition-series';
-    sourceDocSlug = 'bharati-isea-expedition-series';
-    sourceDocTitle = 'Bharati Automatic Weather Station Series';
-    sourceAttribution =
-      'National Polar Data Centre (NCPOR) — Bharati scientific dataset';
-  } else if (q.includes('himadri')) {
-    results = himadriMLResults;
-    datasetRoute = '/knowledge/data/himadri-ott-weather-2018-2021';
-    sourceDocSlug = 'himadri-ott-weather-2018-2021';
-    sourceDocTitle = 'Himadri High Arctic Meteorological Series';
-    sourceAttribution =
-      'National Polar Data Centre (NCPOR) — Himadri scientific dataset';
+**Region:** ${cleanText(station.region) || 'Polar region'}
+
+**Location:** ${cleanText(station.location) || 'Not specified'}
+
+**Established:** ${station.established_year || 'Not specified'
+          }
+
+**Research focus:** ${researchFocus || 'Not specified'
+          }
+
+${cleanText(station.overview || station.description)}`,
+        sources: [createStationSource(station)],
+      };
+    }
+
+    return {
+      answer: `### ${getStationName(station)}
+
+**Region:** ${cleanText(station.region) || 'Polar region'}
+
+**Location:** ${cleanText(station.location) || 'Not specified'}
+
+**Established:** ${station.established_year || 'Not specified'
+        }
+
+${cleanText(station.overview || station.description)}`,
+      sources: [createStationSource(station)],
+    };
   }
 
-  const rawImportances =
-    results.feature_importances as Record<string, number>;
+  const expedition = findExpedition(query, expeditions);
 
-  const topFeatures = Object.entries(rawImportances)
-    .slice(0, 5)
-    .map(([name, importance]) => ({
-      name,
-      importance: Number(importance),
-    }));
+  if (expedition) {
+    return {
+      answer: `### ${getExpeditionName(expedition)}
 
-  const [stationLabel, region = 'Polar'] = results.station
-    .split(',')
-    .map((part: string) => part.trim());
-  const stationName = stationLabel.replace(/^bharti/i, 'Bharati');
-  const modelType =
-    results.model_parameters.algorithm === 'RandomForestRegressor'
-      ? 'Random Forest'
-      : results.model_parameters.algorithm;
-  const hasSeasonalPredictor = topFeatures.some((feature) =>
-    feature.name.includes('month')
-  );
-  const hasAnnualCyclePredictor = topFeatures.some(
-    (feature) => feature.name === 'dayofyear'
-  );
-  const keyInsight =
-    hasSeasonalPredictor && hasAnnualCyclePredictor
-      ? `Seasonal and time-of-year variation are the strongest predictors of temperature at ${stationName}.`
-      : `The model identifies patterns in meteorological observations that help explain temperature variation at ${stationName}.`;
+**Region:** ${cleanText(expedition.region) || 'Not specified'
+        }
 
-  const scientificML: ScientificMLCardData = {
-    datasetName: results.dataset_name,
-    station: stationName,
-    region,
-    modelType,
-    keyInsight,
-    target: results.target,
-    targetDescription: results.target_description,
-    trainingPeriod: results.training_period,
-    testingPeriod: results.testing_period,
-    trainSampleCount: results.train_sample_count,
-    testSampleCount: results.test_sample_count,
-    totalValidSamples: results.total_valid_samples,
-    r2Score: results.r2_score,
-    mae: results.mae,
-    rmse: results.rmse,
-    topFeatures,
-    algorithm: results.model_parameters.algorithm,
-    datasetRoute,
-    sourceAttribution,
-  };
+**Year:** ${expedition.year || 'Not specified'
+        }
 
-  const featureLabels: Record<string, string> = {
-    cos_month: 'Cos-encoded monthly solar cycle',
-    sin_month: 'Sin-encoded monthly cycle',
-    dayofyear: 'Day-of-year position',
-    ws: 'Wind speed (m/s)',
-    rh: 'Relative humidity (%)',
-    wd: 'Wind direction (degrees)',
-    ap: 'Surface atmospheric pressure (hPa)',
-    hour: 'Hour of day (0-23)',
-    cos_hour: 'Cos-encoded diurnal cycle',
-    sin_hour: 'Sin-encoded diurnal cycle',
-    month: 'Month indicator (1-12)',
-  };
+**Objectives:** ${cleanText(expedition.objectives) || 'Not specified'
+        }
 
-  const answer = `SCIENTIFIC INTELLIGENCE REPORT: ${stationName}, ${region} Temperature Prediction Model
+${cleanText(expedition.description)}`,
+      sources: [createExpeditionSource(expedition)],
+    };
+  }
 
-Evaluation results for the trained ${results.model_parameters.algorithm} on the ${stationName}, ${region} meteorological observation series:
+  const normalizedQuery = query.toLowerCase();
 
-• Target Variable: Ambient Air Temperature (${results.target} in °C)
-• Model Algorithm: ${results.model_parameters.algorithm} (n_estimators=${results.model_parameters.n_estimators}, max_depth=${results.model_parameters.max_depth}, random_state=${results.model_parameters.random_state})
-• Training Chronological Period: ${results.training_period} (${results.train_sample_count.toLocaleString()} valid hourly samples)
-• Independent Test Period: ${results.testing_period} (${results.test_sample_count.toLocaleString()} valid hourly samples)
-• Total Processed Observations: ${results.total_valid_samples.toLocaleString()} clean hourly weather readings
+  const matchingDocuments = documents.filter((document) => {
+    const searchable = [
+      getDocumentName(document),
+      cleanText(document.description),
+      cleanText(document.category),
+      cleanText(document.region),
+      cleanText(document.institution),
+      ...(Array.isArray(document.research_areas)
+        ? document.research_areas
+        : []),
+    ]
+      .join(' ')
+      .toLowerCase();
 
-Model Performance Metrics:
-- Explained variance (R²): ${results.r2_score.toFixed(4)}
-- Mean absolute error: ${results.mae.toFixed(4)} °C
-- Root mean squared error: ${results.rmse.toFixed(4)} °C
+    return normalizedQuery
+      .split(/\s+/)
+      .some(
+        (word) =>
+          word.length > 3 &&
+          searchable.includes(word),
+      );
+  });
 
-Top Contributing Predictor Variables:
-${topFeatures
+  if (matchingDocuments.length > 0) {
+    const topDocuments = matchingDocuments.slice(0, 5);
+
+    const sourceText = topDocuments
       .map(
-        (feature, index) =>
-          `${index + 1}. ${feature.name}: ${(feature.importance * 100).toFixed(1)}% (${featureLabels[feature.name] || 'Meteorological feature'})`
+        (document) =>
+          `- **${getDocumentName(document)}** — ${cleanText(document.description) ||
+          'No description available.'
+          }`,
       )
-      .join('\n')}`;
+      .join('\n');
+
+    return {
+      answer: `### Relevant POLAR resources
+
+${sourceText}`,
+      sources: topDocuments.map(createDocumentSource),
+    };
+  }
 
   return {
-    answer,
-    sources: [
-      {
-        documentSlug: sourceDocSlug,
-        title: sourceDocTitle,
-        page: 'Scientific ML Model Evaluation',
-        excerpt: `RandomForestRegressor evaluation on ${results.total_valid_samples.toLocaleString()} observations. R² = ${results.r2_score}, MAE = ${results.mae} °C.`,
-      },
-    ],
-    scientificML,
+    answer:
+      "I couldn't find a matching resource in the current POLAR knowledge repository. Try asking about a station, expedition, research topic, or document.",
+    sources: [],
   };
 }
 
 export async function askPolarAI(
   query: string,
-  allDocs: Document[],
-  allExpeditions: Expedition[] = [],
-  allStations: Station[] = []
+  documents: Document[],
+  expeditions: Expedition[],
+  stations: Station[],
 ): Promise<AIResponse> {
-  // ============================================================
-  // 1. SCIENTIFIC ML MODE
-  // Only explicit ML/model/prediction questions use this path.
-  // ============================================================
-  if (isScientificMLQuery(query)) {
-    await new Promise((r) => setTimeout(r, 400));
-    return getScientificMLResponse(query);
+  const cleanedQuery = query.trim();
+
+  if (!cleanedQuery) {
+    return {
+      answer: 'Please enter a question about polar science.',
+      sources: [],
+    };
   }
 
-  // ============================================================
-  // 2. NORMAL POLAR RAG MODE
-  // ============================================================
+  /*
+   * Handle station ↔ expedition relationship questions
+   * directly from Supabase data.
+   */
+  const relationshipResponse = stationExpeditionResponse(
+    cleanedQuery,
+    stations,
+    expeditions,
+  );
+
+  if (relationshipResponse) {
+    return relationshipResponse;
+  }
+
   try {
-    const response = await fetch(
-      `${POLAR_RAG_ENDPOINT}/api/ask?query=${encodeURIComponent(query)}`
+    const endpoint = `${POLAR_RAG_ENDPOINT}/api/ask?query=${encodeURIComponent(
+      cleanedQuery,
+    )}`;
+
+    const response = await fetch(endpoint);
+
+    if (!response.ok) {
+      throw new Error(
+        `POLAR RAG returned ${response.status}`,
+      );
+    }
+
+    const data = await response.json();
+
+    const answer =
+      cleanText(data.answer) ||
+      cleanText(data.response) ||
+      cleanText(data.message);
+
+    const backendSources =
+      Array.isArray(data.citations)
+        ? data.citations
+        : Array.isArray(data.sources)
+          ? data.sources
+          : [];
+
+    const sources = normalizeSources(
+      backendSources,
+      documents,
+      expeditions,
+      stations,
     );
 
-    if (response.ok) {
-      const payload: unknown = await response.json();
-      const data: FastAPIResponse = isRecord(payload) ? payload : {};
-
-      const backendSources: FastAPISource[] = Array.isArray(data.sources)
-        ? data.sources.filter(isRecord)
-        : [];
-
-      const sources: AISource[] = [];
-      const seenRoutes = new Set<string>();
-
-      for (const item of backendSources) {
-        if (typeof item.title !== 'string' || !item.title.trim()) {
-          continue;
-        }
-
-        const sourceTitle = item.title.trim();
-        const normalizedTitle = normalizeTitle(sourceTitle);
-
-        const sourceType =
-          typeof item.source_type === 'string'
-            ? item.source_type.toLowerCase()
-            : '';
-
-        const excerpt =
-          typeof item.excerpt === 'string'
-            ? item.excerpt
-            : '';
-
-        // --------------------------------------------------------
-        // DOCUMENT
-        // --------------------------------------------------------
-        const matchingDoc =
-          !sourceType || sourceType === 'documents'
-            ? allDocs.find(
-                (doc) =>
-                  normalizeTitle(doc.title) === normalizedTitle
-              )
-            : undefined;
-
-        if (matchingDoc) {
-          const route = `/knowledge/${matchingDoc.slug}`;
-
-          if (!seenRoutes.has(route)) {
-            seenRoutes.add(route);
-
-            sources.push({
-              documentSlug: matchingDoc.slug,
-              title: matchingDoc.title,
-              page:
-                typeof item.type === 'string' && item.type
-                  ? item.type
-                  : 'Repository',
-              excerpt:
-                excerpt ||
-                matchingDoc.description ||
-                matchingDoc.abstract ||
-                '',
-              route,
-            });
-          }
-
-          continue;
-        }
-
-        // --------------------------------------------------------
-        // EXPEDITION
-        // --------------------------------------------------------
-        const matchingExpedition =
-          !sourceType || sourceType === 'expeditions'
-            ? allExpeditions.find(
-                (expedition) =>
-                  normalizeTitle(expedition.title) === normalizedTitle
-              )
-            : undefined;
-
-        if (matchingExpedition) {
-          const route = `/expeditions/${matchingExpedition.slug}`;
-
-          if (!seenRoutes.has(route)) {
-            seenRoutes.add(route);
-
-            sources.push({
-              documentSlug: matchingExpedition.slug,
-              title: matchingExpedition.title,
-              page: 'Expedition',
-              excerpt:
-                excerpt ||
-                matchingExpedition.description ||
-                '',
-              route,
-            });
-          }
-
-          continue;
-        }
-
-        // --------------------------------------------------------
-        // STATION
-        // --------------------------------------------------------
-        const matchingStation =
-          !sourceType || sourceType === 'stations'
-            ? allStations.find(
-                (station) =>
-                  normalizeTitle(station.name) === normalizedTitle ||
-                  normalizeTitle(`${station.name} station`) ===
-                    normalizedTitle
-              )
-            : undefined;
-
-        if (matchingStation) {
-          const route = `/explore/${matchingStation.slug}`;
-
-          if (!seenRoutes.has(route)) {
-            seenRoutes.add(route);
-
-            sources.push({
-              documentSlug: matchingStation.slug,
-              title: matchingStation.name,
-              page: 'Station',
-              excerpt:
-                excerpt ||
-                matchingStation.description ||
-                '',
-              route,
-            });
-          }
-
-          continue;
-        }
-      }
-
-      // --------------------------------------------------------
-      // IMPORTANT:
-      // Use the REAL FastAPI answer.
-      // Do NOT replace it with the station description.
-      // --------------------------------------------------------
-      const answer =
-        typeof data.answer === 'string' && data.answer.trim()
-          ? data.answer.trim()
-          : 'I found relevant information in the POLAR knowledge repository.';
-
+    if (answer) {
       return {
         answer,
         sources,
       };
     }
   } catch (error) {
-    console.error('POLAR RAG connection failed:', error);
+    console.warn(
+      'POLAR RAG backend unavailable. Using local fallback.',
+      error,
+    );
   }
 
-  // ============================================================
-  // 3. LOCAL FALLBACK
-  // Only used when FastAPI genuinely fails.
-  // ============================================================
-  await new Promise((r) => setTimeout(r, 600));
-
-  const relevant = retrieveRelevantDocs(query, allDocs);
-
-  return generateDemoAnswer(query, relevant);
-}
-
-function generateDemoContent(
-  type: ContentType,
-  doc: Document | null,
-  prompt: string
-): string {
-  if (!doc) {
-    return 'Please select a document or expedition to generate content.';
-  }
-
-  const title = doc.title;
-  const desc = doc.description || doc.abstract || '';
-  const region = doc.region;
-  const year = doc.year;
-
-  switch (type) {
-    case 'Website Article':
-      return `# ${title}: India's Polar Research in ${region}
-
-India's polar science program continues to push the boundaries of what we know about Earth's most extreme environments. The ${year} research documented in "${title}" represents a significant contribution to our understanding of ${region}.
-
-## Key Findings
-
-${desc}
-
-## Why This Matters
-
-The research conducted by Indian scientists at our polar stations — Himadri in the Arctic, Maitri and Bharati in Antarctica — helps us understand climate patterns that affect the entire planet. What happens at the poles does not stay at the poles.
-
-## Looking Forward
-
-This work is part of India's long-term commitment to polar science, building on decades of expedition data and contributing to global climate research networks.
-
-*Source: ${doc.source || 'NCPOR'}*`;
-
-    case 'Instagram Caption':
-      return `India at the poles. ${title} documents groundbreaking ${region} research from ${year}.
-
-${desc.substring(0, 100)}...
-
-#PolarScience #IndiaAtThePoles #${region.replace(
-        /\s+/g,
-        ''
-      )} #NCPOR #ClimateScience #PolarResearch #IndianScience`;
-
-    case 'Social Media Post':
-      return `New from India's polar science program: "${title}"
-
-${desc.substring(0, 200)}
-
-Region: ${region} | Year: ${year}
-Published by ${doc.institution || 'NCPOR'}
-
-Read more in the POLAR Knowledge Repository.`;
-
-    case 'YouTube Description':
-      return `${title}
-India's Polar Science | ${region} | ${year}
-
-In this video, we explore the findings from "${title}", a key research document from India's polar science program.
-
-${desc}
-
-About the research:
-- Region: ${region}
-- Year: ${year}
-- Institution: ${doc.institution || 'NCPOR'}
-- Research areas: ${(doc.research_areas || []).join(', ')}
-
-Learn more about India's polar research at the POLAR Knowledge Repository.
-
-#PolarScience #${region.replace(
-        /\s+/g,
-        ''
-      )} #IndianScience #ClimateChange #NCPOR`;
-
-    case 'Short Video Script':
-      return `[SCENE 1 — OPENING]
-Visual: Aerial shot of ${region} ice landscape
-Narrator: "In the frozen extremes of ${region}, Indian scientists are uncovering secrets of our planet's past — and its future."
-
-[SCENE 2 — RESEARCH]
-Visual: Scientists working at station, collecting samples
-Narrator: "${desc.substring(0, 150)}"
-
-[SCENE 3 — IMPACT]
-Visual: Data visualization, climate graphs
-Narrator: "This research from ${year} helps us understand how polar changes affect the entire globe — including India's monsoons and sea levels."
-
-[SCENE 4 — CLOSING]
-Visual: India flag at polar station, sunset
-Narrator: "India's polar journey continues. From Himadri to Bharati, science at the extremes, for the benefit of all."
-
-Source: ${title} (${year})`;
-
-    case 'Outreach Article':
-      return `# ${title}: Science from the Ends of the Earth
-
-*An outreach article making polar research accessible to everyone.*
-
-## The Story
-
-In ${year}, a team of Indian scientists working in ${region} produced research that helps us understand our changing planet. Their work, documented in "${title}," is part of India's ongoing polar science program — one of the world's most important efforts to study the polar regions.
-
-## What They Found
-
-${desc}
-
-## What It Means for You
-
-You might wonder: why does research in ${region} matter to someone in India? The answer is connections. Polar ice affects ocean currents, which affect monsoons, which affect agriculture, which affects food security. The science done at India's polar stations — Himadri, Maitri, and Bharati — ripples outward to touch every part of our lives.
-
-## The People Behind the Science
-
-This research was conducted by scientists from ${doc.institution || 'NCPOR'
-        }, working in some of the most challenging conditions on Earth. They traveled thousands of kilometers, endured extreme cold, and spent months away from home — all to bring back knowledge that benefits us all.
-
-*This article is based on "${title}" from the POLAR Knowledge Repository.*`;
-
-    default:
-      return desc;
-  }
-}
-
-export async function generateContent(
-  type: ContentType,
-  doc: Document | null,
-  prompt: string = '',
-  allDocs: Document[] = []
-): Promise<string> {
-  const targetDoc =
-    doc ||
-    (prompt ? retrieveRelevantDocs(prompt, allDocs)[0] : null) ||
-    (allDocs.length > 0 ? allDocs[0] : null);
-
-  if (AI_ENDPOINT && AI_API_KEY) {
-    try {
-      const response = await fetch(AI_ENDPOINT, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${AI_API_KEY}`,
-        },
-        body: JSON.stringify({
-          task: 'generate_content',
-          type,
-          documentSlug: targetDoc?.slug,
-          prompt,
-        }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-
-        if (data.text) return data.text;
-      }
-    } catch {
-      // Fall through to demo
-    }
-  }
-
-  await new Promise((r) => setTimeout(r, 600));
-
-  return generateDemoContent(type, targetDoc, prompt);
+  return localFallback(
+    cleanedQuery,
+    documents,
+    expeditions,
+    stations,
+  );
 }
