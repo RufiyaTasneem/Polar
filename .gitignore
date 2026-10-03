@@ -32,3 +32,5 @@ backend/chroma_db/
 backend/minilm/
 backend/models/
 *.pyc
+.vercel
+.env*
