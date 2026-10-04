@@ -1,5 +1,6 @@
 import os
 import json
+import joblib
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
@@ -7,9 +8,9 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
 
 def main():
-
     dataset_path = 'datasets/himadri/himadri.csv'
     output_json_path = 'src/lib/himadriMLResults.json'
+    output_model_path = 'backend/models/himadri_rf.joblib'
 
     print(f"Loading dataset from {dataset_path}...")
     df = pd.read_csv(dataset_path)
@@ -29,7 +30,6 @@ def main():
     )
 
     df_clean = df[valid_mask].copy()
-
     cleaned_len = len(df_clean)
 
     print(
@@ -108,7 +108,20 @@ def main():
 
     model.fit(X_train, y_train)
 
-    # 7. Evaluation
+    # 7. Save trained model
+    os.makedirs(
+        os.path.dirname(output_model_path),
+        exist_ok=True
+    )
+
+    joblib.dump(model, output_model_path)
+
+    print(
+        f"Trained Himadri model saved to "
+        f"{output_model_path}"
+    )
+
+    # 8. Evaluation
     print("Evaluating model performance on test set...")
 
     y_pred = model.predict(X_test)
@@ -122,7 +135,7 @@ def main():
     print(f"MAE (°C): {mae:.4f}")
     print(f"RMSE (°C): {rmse:.4f}")
 
-    # 8. Feature importances
+    # 9. Feature importances
     importances = model.feature_importances_
 
     feature_imp_dict = {
@@ -143,7 +156,7 @@ def main():
     for feat, imp in sorted_importances.items():
         print(f"  {feat:12s}: {imp:.4f}")
 
-    # 9. Build JSON payload
+    # 10. Build JSON payload
     results_payload = {
         "dataset_name": "himadri.csv",
         "station": "Himadri Station, Arctic",
@@ -172,7 +185,7 @@ def main():
         "generated_at": pd.Timestamp.now().isoformat()
     }
 
-    # 10. Save JSON
+    # 11. Save JSON
     os.makedirs(
         os.path.dirname(output_json_path),
         exist_ok=True

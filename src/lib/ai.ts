@@ -5,7 +5,8 @@ import type {
 } from '@/lib/hooks';
 
 const POLAR_RAG_ENDPOINT =
-  import.meta.env.VITE_POLAR_RAG_ENDPOINT || 'http://127.0.0.1:8000';
+  import.meta.env.VITE_POLAR_RAG_ENDPOINT ||
+  'http://127.0.0.1:8000';
 
 export interface AISource {
   title: string;
@@ -63,29 +64,35 @@ function createStationSource(station: Station): AISource {
   return {
     title: getStationName(station),
     type: 'Station',
-    // IMPORTANT:
-    // StationDetail is routed through /explore/:slug
     route: slug ? `/explore/${slug}` : '/explore',
   };
 }
 
-function createExpeditionSource(expedition: Expedition): AISource {
+function createExpeditionSource(
+  expedition: Expedition,
+): AISource {
   const slug = cleanText(expedition.slug);
 
   return {
     title: getExpeditionName(expedition),
     type: 'Expedition',
-    route: slug ? `/expeditions/${slug}` : '/expeditions',
+    route: slug
+      ? `/expeditions/${slug}`
+      : '/expeditions',
   };
 }
 
-function createDocumentSource(document: Document): AISource {
+function createDocumentSource(
+  document: Document,
+): AISource {
   const slug = cleanText(document.slug);
 
   return {
     title: getDocumentName(document),
     type: cleanText(document.type) || 'Document',
-    route: slug ? `/knowledge/${slug}` : '/knowledge',
+    route: slug
+      ? `/knowledge/${slug}`
+      : '/knowledge',
     documentSlug: slug || undefined,
   };
 }
@@ -119,20 +126,20 @@ function normalizeSource(
     source.category,
   );
 
-  /*
-   * If the backend already gives us a route, use it.
-   * But fix old station routes that incorrectly use /stations/:slug.
-   */
   let route = cleanText(source.route);
 
   if (route.startsWith('/stations/')) {
-    route = route.replace('/stations/', '/explore/');
+    route = route.replace(
+      '/stations/',
+      '/explore/',
+    );
   }
 
   if (!route && slug) {
     const station = stations.find(
       (item) =>
-        cleanText(item.slug).toLowerCase() === slug.toLowerCase(),
+        cleanText(item.slug).toLowerCase() ===
+        slug.toLowerCase(),
     );
 
     if (station) {
@@ -141,7 +148,8 @@ function normalizeSource(
 
     const expedition = expeditions.find(
       (item) =>
-        cleanText(item.slug).toLowerCase() === slug.toLowerCase(),
+        cleanText(item.slug).toLowerCase() ===
+        slug.toLowerCase(),
     );
 
     if (!route && expedition) {
@@ -150,7 +158,8 @@ function normalizeSource(
 
     const document = documents.find(
       (item) =>
-        cleanText(item.slug).toLowerCase() === slug.toLowerCase(),
+        cleanText(item.slug).toLowerCase() ===
+        slug.toLowerCase(),
     );
 
     if (!route && document) {
@@ -159,11 +168,17 @@ function normalizeSource(
   }
 
   if (!route) {
-    if (type.toLowerCase().includes('station')) {
+    if (
+      type
+        .toLowerCase()
+        .includes('station')
+    ) {
       const station = stations.find(
         (item) =>
-          cleanText(item.name).toLowerCase() === title.toLowerCase() ||
-          cleanText(item.slug).toLowerCase() === title.toLowerCase(),
+          cleanText(item.name).toLowerCase() ===
+          title.toLowerCase() ||
+          cleanText(item.slug).toLowerCase() ===
+          title.toLowerCase(),
       );
 
       if (station) {
@@ -173,12 +188,16 @@ function normalizeSource(
 
     if (
       !route &&
-      type.toLowerCase().includes('expedition')
+      type
+        .toLowerCase()
+        .includes('expedition')
     ) {
       const expedition = expeditions.find(
         (item) =>
-          getExpeditionName(item).toLowerCase() === title.toLowerCase() ||
-          cleanText(item.slug).toLowerCase() === title.toLowerCase(),
+          getExpeditionName(item).toLowerCase() ===
+          title.toLowerCase() ||
+          cleanText(item.slug).toLowerCase() ===
+          title.toLowerCase(),
       );
 
       if (expedition) {
@@ -189,8 +208,10 @@ function normalizeSource(
     if (!route) {
       const document = documents.find(
         (item) =>
-          getDocumentName(item).toLowerCase() === title.toLowerCase() ||
-          cleanText(item.slug).toLowerCase() === title.toLowerCase(),
+          getDocumentName(item).toLowerCase() ===
+          title.toLowerCase() ||
+          cleanText(item.slug).toLowerCase() ===
+          title.toLowerCase(),
       );
 
       if (document) {
@@ -233,12 +254,18 @@ function findStation(
   query: string,
   stations: Station[],
 ): Station | null {
-  const normalizedQuery = query.toLowerCase();
+  const normalizedQuery =
+    query.toLowerCase();
 
   return (
     stations.find((station) => {
-      const name = cleanText(station.name).toLowerCase();
-      const slug = cleanText(station.slug).toLowerCase();
+      const name = cleanText(
+        station.name,
+      ).toLowerCase();
+
+      const slug = cleanText(
+        station.slug,
+      ).toLowerCase();
 
       return (
         normalizedQuery.includes(name) ||
@@ -253,12 +280,18 @@ function findExpedition(
   query: string,
   expeditions: Expedition[],
 ): Expedition | null {
-  const normalizedQuery = query.toLowerCase();
+  const normalizedQuery =
+    query.toLowerCase();
 
   return (
     expeditions.find((expedition) => {
-      const name = getExpeditionName(expedition).toLowerCase();
-      const slug = cleanText(expedition.slug).toLowerCase();
+      const name = getExpeditionName(
+        expedition,
+      ).toLowerCase();
+
+      const slug = cleanText(
+        expedition.slug,
+      ).toLowerCase();
 
       return (
         normalizedQuery.includes(name) ||
@@ -274,61 +307,89 @@ function stationExpeditionResponse(
   stations: Station[],
   expeditions: Expedition[],
 ): AIResponse | null {
-  const station = findStation(query, stations);
+  const station = findStation(
+    query,
+    stations,
+  );
 
   if (!station) {
     return null;
   }
 
-  const relatedExpeditions = expeditions.filter((expedition) => {
-    const stationId = cleanText(expedition.station_id);
+  const relatedExpeditions =
+    expeditions.filter((expedition) => {
+      const stationId = cleanText(
+        expedition.station_id,
+      );
 
-    return (
-      stationId === cleanText(station.id) ||
-      cleanText(expedition.station?.id) === cleanText(station.id) ||
-      cleanText(expedition.station?.slug) === cleanText(station.slug)
-    );
-  });
+      return (
+        stationId ===
+        cleanText(station.id) ||
+        cleanText(
+          expedition.station?.id,
+        ) === cleanText(station.id) ||
+        cleanText(
+          expedition.station?.slug,
+        ) === cleanText(station.slug)
+      );
+    });
 
-  const normalizedQuery = query.toLowerCase();
+  const normalizedQuery =
+    query.toLowerCase();
 
   const asksForExpeditions =
-    normalizedQuery.includes('expedition') ||
-    normalizedQuery.includes('expeditions') ||
-    normalizedQuery.includes('associated') ||
-    normalizedQuery.includes('conducted');
+    normalizedQuery.includes(
+      'expedition',
+    ) ||
+    normalizedQuery.includes(
+      'expeditions',
+    ) ||
+    normalizedQuery.includes(
+      'associated',
+    ) ||
+    normalizedQuery.includes(
+      'conducted',
+    );
 
   if (!asksForExpeditions) {
     return null;
   }
 
-  const expeditionNames = relatedExpeditions
-    .map((expedition) => {
-      const record = expedition as Expedition & {
-        title?: string | null;
-      };
+  const expeditionNames =
+    relatedExpeditions
+      .map((expedition) => {
+        const record =
+          expedition as Expedition & {
+            title?: string | null;
+          };
 
-      return (
-        record.name ||
-        record.title ||
-        record.slug ||
-        'Unnamed expedition'
-      );
-    })
-    .filter(Boolean)
-    .join(', ');
+        return (
+          record.name ||
+          record.title ||
+          record.slug ||
+          'Unnamed expedition'
+        );
+      })
+      .filter(Boolean)
+      .join(', ');
 
   const sources: AISource[] = [
     createStationSource(station),
-    ...relatedExpeditions.map(createExpeditionSource),
+    ...relatedExpeditions.map(
+      createExpeditionSource,
+    ),
   ];
 
-  if (relatedExpeditions.length === 0) {
+  if (
+    relatedExpeditions.length === 0
+  ) {
     return {
       answer: `${getStationName(
         station,
       )} does not currently have any expeditions associated with it in the POLAR repository.`,
-      sources: [createStationSource(station)],
+      sources: [
+        createStationSource(station),
+      ],
     };
   }
 
@@ -346,115 +407,183 @@ function localFallback(
   expeditions: Expedition[],
   stations: Station[],
 ): AIResponse {
-  const station = findStation(query, stations);
+  const station = findStation(
+    query,
+    stations,
+  );
 
   if (station) {
-    const lowerQuery = query.toLowerCase();
+    const lowerQuery =
+      query.toLowerCase();
 
     if (
       lowerQuery.includes('research') ||
       lowerQuery.includes('focus') ||
       lowerQuery.includes('study')
     ) {
-      const researchFocus = Array.isArray(station.research_focus)
-        ? station.research_focus.join(', ')
-        : cleanText(station.research_focus);
+      const researchFocus =
+        Array.isArray(
+          station.research_focus,
+        )
+          ? station.research_focus.join(
+            ', ',
+          )
+          : cleanText(
+            station.research_focus,
+          );
 
       return {
-        answer: `### ${getStationName(station)}
+        answer: `### ${getStationName(
+          station,
+        )}
 
-**Region:** ${cleanText(station.region) || 'Polar region'}
-
-**Location:** ${cleanText(station.location) || 'Not specified'}
-
-**Established:** ${station.established_year || 'Not specified'
+**Region:** ${cleanText(station.region) ||
+          'Polar region'
           }
 
-**Research focus:** ${researchFocus || 'Not specified'
+**Location:** ${cleanText(station.location) ||
+          'Not specified'
           }
 
-${cleanText(station.overview || station.description)}`,
-        sources: [createStationSource(station)],
+**Established:** ${station.established_year ||
+          'Not specified'
+          }
+
+**Research focus:** ${researchFocus ||
+          'Not specified'
+          }
+
+${cleanText(
+            station.overview ||
+            station.description,
+          )}`,
+        sources: [
+          createStationSource(station),
+        ],
       };
     }
 
     return {
-      answer: `### ${getStationName(station)}
+      answer: `### ${getStationName(
+        station,
+      )}
 
-**Region:** ${cleanText(station.region) || 'Polar region'}
-
-**Location:** ${cleanText(station.location) || 'Not specified'}
-
-**Established:** ${station.established_year || 'Not specified'
+**Region:** ${cleanText(station.region) ||
+        'Polar region'
         }
 
-${cleanText(station.overview || station.description)}`,
-      sources: [createStationSource(station)],
+**Location:** ${cleanText(station.location) ||
+        'Not specified'
+        }
+
+**Established:** ${station.established_year ||
+        'Not specified'
+        }
+
+${cleanText(
+          station.overview ||
+          station.description,
+        )}`,
+      sources: [
+        createStationSource(station),
+      ],
     };
   }
 
-  const expedition = findExpedition(query, expeditions);
+  const expedition =
+    findExpedition(
+      query,
+      expeditions,
+    );
 
   if (expedition) {
     return {
-      answer: `### ${getExpeditionName(expedition)}
+      answer: `### ${getExpeditionName(
+        expedition,
+      )}
 
-**Region:** ${cleanText(expedition.region) || 'Not specified'
+**Region:** ${cleanText(expedition.region) ||
+        'Not specified'
         }
 
-**Year:** ${expedition.year || 'Not specified'
+**Year:** ${expedition.year ||
+        'Not specified'
         }
 
-**Objectives:** ${cleanText(expedition.objectives) || 'Not specified'
+**Objectives:** ${cleanText(
+          expedition.objectives,
+        ) ||
+        'Not specified'
         }
 
-${cleanText(expedition.description)}`,
-      sources: [createExpeditionSource(expedition)],
+${cleanText(
+          expedition.description,
+        )}`,
+      sources: [
+        createExpeditionSource(
+          expedition,
+        ),
+      ],
     };
   }
 
-  const normalizedQuery = query.toLowerCase();
+  const normalizedQuery =
+    query.toLowerCase();
 
-  const matchingDocuments = documents.filter((document) => {
-    const searchable = [
-      getDocumentName(document),
-      cleanText(document.description),
-      cleanText(document.category),
-      cleanText(document.region),
-      cleanText(document.institution),
-      ...(Array.isArray(document.research_areas)
-        ? document.research_areas
-        : []),
-    ]
-      .join(' ')
-      .toLowerCase();
+  const matchingDocuments =
+    documents.filter((document) => {
+      const searchable = [
+        getDocumentName(document),
+        cleanText(document.description),
+        cleanText(document.category),
+        cleanText(document.region),
+        cleanText(
+          document.institution,
+        ),
+        ...(Array.isArray(
+          document.research_areas,
+        )
+          ? document.research_areas
+          : []),
+      ]
+        .join(' ')
+        .toLowerCase();
 
-    return normalizedQuery
-      .split(/\s+/)
-      .some(
-        (word) =>
-          word.length > 3 &&
-          searchable.includes(word),
-      );
-  });
+      return normalizedQuery
+        .split(/\s+/)
+        .some(
+          (word) =>
+            word.length > 3 &&
+            searchable.includes(word),
+        );
+    });
 
   if (matchingDocuments.length > 0) {
-    const topDocuments = matchingDocuments.slice(0, 5);
+    const topDocuments =
+      matchingDocuments.slice(0, 5);
 
-    const sourceText = topDocuments
-      .map(
-        (document) =>
-          `- **${getDocumentName(document)}** — ${cleanText(document.description) ||
-          'No description available.'
-          }`,
-      )
-      .join('\n');
+    const sourceText =
+      topDocuments
+        .map(
+          (document) =>
+            `- **${getDocumentName(
+              document,
+            )}** — ${cleanText(
+              document.description,
+            ) ||
+            'No description available.'
+            }`,
+        )
+        .join('\n');
 
     return {
       answer: `### Relevant POLAR resources
 
 ${sourceText}`,
-      sources: topDocuments.map(createDocumentSource),
+      sources:
+        topDocuments.map(
+          createDocumentSource,
+        ),
     };
   }
 
@@ -465,41 +594,69 @@ ${sourceText}`,
   };
 }
 
+/* =========================================================
+   EXISTING POLAR RAG
+   ========================================================= */
+
 export async function askPolarAI(
   query: string,
   documents: Document[],
   expeditions: Expedition[],
   stations: Station[],
 ): Promise<AIResponse> {
-  const cleanedQuery = query.trim();
+  const cleanedQuery =
+    query.trim();
 
   if (!cleanedQuery) {
     return {
-      answer: 'Please enter a question about polar science.',
+      answer:
+        'Please enter a question about polar science.',
       sources: [],
     };
   }
 
   /*
-   * Handle station ↔ expedition relationship questions
-   * directly from Supabase data.
+   * Handle station ↔ expedition
+   * relationship questions directly
+   * from Supabase data.
    */
-  const relationshipResponse = stationExpeditionResponse(
-    cleanedQuery,
-    stations,
-    expeditions,
-  );
+  const relationshipResponse =
+    stationExpeditionResponse(
+      cleanedQuery,
+      stations,
+      expeditions,
+    );
 
   if (relationshipResponse) {
     return relationshipResponse;
   }
 
   try {
-    const endpoint = `${POLAR_RAG_ENDPOINT}/api/ask?query=${encodeURIComponent(
-      cleanedQuery,
-    )}`;
+    /*
+     * POLAR AI backend uses:
+     *
+     * POST /api/ask
+     *
+     * Request:
+     * {
+     *   "query": "..."
+     * }
+     */
 
-    const response = await fetch(endpoint);
+    const endpoint =
+      `${POLAR_RAG_ENDPOINT}/api/ask`;
+
+    const response =
+      await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type':
+            'application/json',
+        },
+        body: JSON.stringify({
+          query: cleanedQuery,
+        }),
+      });
 
     if (!response.ok) {
       throw new Error(
@@ -507,7 +664,8 @@ export async function askPolarAI(
       );
     }
 
-    const data = await response.json();
+    const data =
+      await response.json();
 
     const answer =
       cleanText(data.answer) ||
@@ -515,18 +673,23 @@ export async function askPolarAI(
       cleanText(data.message);
 
     const backendSources =
-      Array.isArray(data.citations)
+      Array.isArray(
+        data.citations,
+      )
         ? data.citations
-        : Array.isArray(data.sources)
+        : Array.isArray(
+          data.sources,
+        )
           ? data.sources
           : [];
 
-    const sources = normalizeSources(
-      backendSources,
-      documents,
-      expeditions,
-      stations,
-    );
+    const sources =
+      normalizeSources(
+        backendSources,
+        documents,
+        expeditions,
+        stations,
+      );
 
     if (answer) {
       return {
@@ -547,4 +710,110 @@ export async function askPolarAI(
     expeditions,
     stations,
   );
+}
+
+/* =========================================================
+   POLAR OUTREACH CONTENT GENERATOR
+   ========================================================= */
+
+export interface PolarContentResponse {
+  query: string;
+  audience: string;
+  platform: string;
+  content: string;
+  citations: Array<{
+    title: string;
+    source: string;
+    route: string;
+    score?: number;
+  }>;
+}
+
+export async function generatePolarContent(
+  query: string,
+  audience: string = 'public',
+  platform: string = 'website',
+): Promise<PolarContentResponse> {
+  const cleanedQuery =
+    query.trim();
+
+  if (!cleanedQuery) {
+    throw new Error(
+      'Please enter a topic for content generation.',
+    );
+  }
+
+  const endpoint =
+    `${POLAR_RAG_ENDPOINT}/api/generate-content`;
+
+  const response =
+    await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type':
+          'application/json',
+      },
+      body: JSON.stringify({
+        query: cleanedQuery,
+        audience,
+        platform,
+      }),
+    });
+
+  if (!response.ok) {
+    throw new Error(
+      `POLAR content generation failed: ${response.status}`,
+    );
+  }
+
+  const data =
+    await response.json();
+
+  return {
+    query:
+      cleanText(data.query) ||
+      cleanedQuery,
+
+    audience:
+      cleanText(data.audience) ||
+      audience,
+
+    platform:
+      cleanText(data.platform) ||
+      platform,
+
+    content:
+      cleanText(data.content) ||
+      '',
+
+    citations:
+      Array.isArray(
+        data.citations,
+      )
+        ? data.citations.map(
+          (citation: any) => ({
+            title:
+              cleanText(
+                citation.title,
+              ) || 'Source',
+
+            source:
+              cleanText(
+                citation.source,
+              ) || 'POLAR',
+
+            route:
+              cleanText(
+                citation.route,
+              ) || '#',
+
+            score:
+              typeof citation.score ===
+                'number'
+                ? citation.score
+                : undefined,
+          }),
+        )
+        : [],
+  };
 }

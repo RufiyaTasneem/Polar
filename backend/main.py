@@ -1,16 +1,36 @@
 import re
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI
+import pandas as pd
+
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
-from rag import search_knowledge
+from backend.rag import (
+    search_knowledge,
+    get_expeditions_for_station,
+)
+
+from backend.temperature_ml import (
+    predict_temperature,
+    station_display_name,
+)
 
 
-# =============================================================
-# FASTAPI APP
-# =============================================================
+# ============================================================
+# FASTAPI
+# ============================================================
 
-app = FastAPI(title="POLAR AI API")
+app = FastAPI(
+    title="POLAR AI API",
+    description=(
+        "Semantic RAG + Temperature ML + Outreach Content API "
+        "for the POLAR Science Portal"
+    ),
+    version="2.4.0",
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -21,1923 +41,1936 @@ app.add_middleware(
 )
 
 
-@app.get("/")
-def root():
-    return {"message": "POLAR AI API is running"}
+# ============================================================
+# BASIC TEXT HELPERS
+# ============================================================
+
+def clean_text(value: Any) -> str:
+    if value is None:
+        return ""
+
+    text = str(value)
+    text = re.sub(r"\s+", " ", text)
+
+    return text.strip()
 
 
-# =============================================================
-# PARSING HELPERS
-# =============================================================
+def split_values(value: Any) -> List[str]:
+    if value is None:
+        return []
 
-def parse_content(content: str):
-    """Convert POLAR knowledge records into a dictionary."""
+    if isinstance(value, list):
+        return [
+            clean_text(item)
+            for item in value
+            if clean_text(item)
+        ]
 
-    fields = {}
+    text = clean_text(value)
 
-    for line in content.splitlines():
-        if ":" in line:
-            key, value = line.split(":", 1)
-            fields[key.strip()] = value.strip()
+    if not text:
+        return []
 
-    return fields
+    parts = re.split(r",|;|\|", text)
 
-
-def get_year(result):
-    """Get year from a POLAR knowledge record."""
-
-    fields = parse_content(
-        result.get("content", "")
-    )
-
-    metadata = result.get("metadata") or {}
-
-    year = fields.get(
-        "Year",
-        metadata.get("year", 0)
-    )
-
-    try:
-        return int(year)
-    except (ValueError, TypeError):
-        return 0
+    return [
+        clean_text(part)
+        for part in parts
+        if clean_text(part)
+    ]
 
 
-def get_source_details(result):
-    """Extract structured information from a POLAR knowledge record."""
+def join_naturally(items: List[str]) -> str:
+    items = [
+        clean_text(item)
+        for item in items
+        if clean_text(item)
+    ]
 
-    fields = parse_content(
-        result.get("content", "")
-    )
+    if not items:
+        return ""
 
-    metadata = result.get(
-        "metadata",
-        {}
-    ) or {}
-
-    source_type = metadata.get(
-        "source",
-        ""
-    )
-
-    title = fields.get(
-        "Title",
-        fields.get(
-            "Expedition",
-            fields.get(
-                "Station",
-                metadata.get(
-                    "title",
-                    "POLAR Knowledge Source"
-                )
-            )
-        )
-    )
-
-    description = fields.get(
-        "Description",
-        ""
-    )
-
-    abstract = fields.get(
-        "Abstract",
-        ""
-    )
-
-    objectives = fields.get(
-        "Objectives",
-        ""
-    )
-
-    research_areas = fields.get(
-        "Research Areas",
-        ""
-    )
-
-    findings = fields.get(
-        "Findings",
-        ""
-    )
-
-    return {
-        "fields": fields,
-        "metadata": metadata,
-        "source_type": source_type,
-        "title": title,
-        "description": description,
-        "abstract": abstract,
-        "objectives": objectives,
-        "research_areas": research_areas,
-        "findings": findings,
-    }
-
-
-# =============================================================
-# TEXT HELPERS
-# =============================================================
-
-def _join_naturally(items):
-    items = list(
-        dict.fromkeys(
-            item.strip()
-            for item in items
-            if item and item.strip()
-        )
-    )
-
-    if len(items) < 2:
-        return items[0] if items else ""
+    if len(items) == 1:
+        return items[0]
 
     if len(items) == 2:
         return f"{items[0]} and {items[1]}"
 
-    return f"{', '.join(items[:-1])}, and {items[-1]}"
+    return ", ".join(items[:-1]) + f", and {items[-1]}"
 
 
-def _research_areas(details):
-    raw_areas = _clean_text(
-        details["research_areas"]
-    )
+def first_non_empty(
+    metadata: Dict[str, Any],
+    *keys: str,
+) -> str:
 
-    if not raw_areas:
-        return []
+    for key in keys:
+        value = clean_text(metadata.get(key))
 
-    return _split_values(raw_areas)
-
-
-def _clean_text(text):
-    text = str(text or "").strip()
-    text = re.sub(
-        r"\b(\w+)(\s+\1\b)+",
-        r"\1",
-        text,
-        flags=re.IGNORECASE,
-    )
-    text = re.sub(
-        r"\bto(?:\s+to)+\b",
-        "to",
-        text,
-        flags=re.IGNORECASE,
-    )
-    text = re.sub(r"\s+([,.;!?])", r"\1", text)
-    text = re.sub(r"([,;!?])\1+", r"\1", text)
-    return text.strip()
-
-
-def _split_values(value):
-    return [
-        _clean_text(item).strip(" .;")
-        for item in re.split(r"[,;]", value or "")
-        if _clean_text(item).strip(" .;")
-    ]
-
-
-def _objective_phrase(objectives):
-    phrase = _clean_text(objectives).strip(" .;")
-
-    if not phrase:
-        return ""
-
-    phrase = re.sub(
-        r"^(?:objectives?\s*[:\-]\s*|objectives?\s+|"
-        r"objective\s+of\s+the\s+study\s*[:\-]?\s*)",
-        "",
-        phrase,
-        flags=re.IGNORECASE,
-    ).strip()
-    phrase = re.sub(r"^(?:to\s+)+", "To ", phrase, flags=re.IGNORECASE)
-
-    if phrase.lower().startswith("study "):
-        phrase = "To " + phrase
-    elif phrase.lower().startswith("investigate "):
-        phrase = "To " + phrase
-    elif phrase.lower().startswith("investigation of "):
-        phrase = "To investigate " + phrase[len("investigation of "):]
-    elif phrase.lower().startswith("examine "):
-        phrase = "To " + phrase
-    elif phrase.lower().startswith("monitor "):
-        phrase = "To " + phrase
-    elif phrase.lower().startswith("assess "):
-        phrase = "To " + phrase
-    elif phrase[:1].islower():
-        phrase = phrase[:1].upper() + phrase[1:]
-
-    return _clean_text(phrase)
-
-
-def _bullet_section(label, items):
-    cleaned = list(
-        dict.fromkeys(
-            _clean_text(item).strip(" .;")
-            for item in items
-            if _clean_text(item).strip(" .;")
-        )
-    )
-    if not cleaned:
-        return ""
-    return f"{label}:\n" + "\n".join(
-        f"• {item}" for item in cleaned
-    )
-
-
-def _research_record_summary(details):
-    """
-    Create a short grounded summary from a retrieved record.
-
-    IMPORTANT:
-    Titles are taken directly from the repository.
-    We do not rename or invent source titles.
-    """
-
-    title = _clean_text(details["title"])
-
-    areas = _join_naturally(
-        _research_areas(details)
-    )
-
-    objectives = _objective_phrase(details["objectives"])
-
-    if areas and objectives:
-        return (
-            f"{title} — Research areas: {areas}. "
-            f"Objective: {objectives}."
-        )
-
-    if objectives:
-        return f"{title} — Objective: {objectives}."
-
-    description = (
-        details["description"]
-        .strip()
-        .rstrip(".")
-    )
-
-    if description:
-
-        including = description.lower().find(
-            "including "
-        )
-
-        if including >= 0:
-
-            findings = (
-                description[
-                    including + len("including "):
-                ]
-                .rstrip(".")
-            )
-
-            return f"{title} highlights {findings}."
-
-        return f"{description} ({title})."
-
-    abstract = details["abstract"].strip()
-
-    if abstract:
-        return (
-            f"{abstract.rstrip('.')} ({title})."
-        )
-
-    findings = details["findings"].strip()
-
-    if findings:
-        return (
-            f"{title} reports "
-            f"{findings[:1].lower()}"
-            f"{findings[1:].rstrip('.')}."
-        )
-
-    if areas:
-        return f"{title} covers {areas}."
+        if value:
+            return value
 
     return ""
 
 
-# =============================================================
-# EXPEDITION DETECTION
-# =============================================================
+# ============================================================
+# METADATA NORMALIZATION
+# ============================================================
 
-def _is_expedition_query(query: str):
-    """
-    Detect questions that are asking about expeditions.
+def normalize_metadata(
+    metadata: Optional[Dict[str, Any]]
+) -> Dict[str, Any]:
 
-    This allows us to prioritize structured expedition records
-    instead of summarizing unrelated regional records.
-    """
+    if not metadata:
+        return {}
 
-    q = query.lower()
+    normalized = dict(metadata)
 
-    expedition_terms = (
-        "expedition",
-        "expeditions",
-        "objectives",
-        "institutions",
-        "scientists",
-        "research areas",
+    normalized["source"] = clean_text(
+        normalized.get("source")
+    ).lower()
+
+    normalized["title"] = first_non_empty(
+        normalized,
+        "title",
+        "name",
+        "document_title",
+        "expedition_title",
+        "station_name",
     )
 
+    normalized["name"] = first_non_empty(
+        normalized,
+        "name",
+        "title",
+        "station_name",
+        "expedition_title",
+        "document_title",
+    )
+
+    normalized["year"] = first_non_empty(
+        normalized,
+        "year",
+        "expedition_year",
+        "publication_year",
+    )
+
+    normalized["region"] = first_non_empty(
+        normalized,
+        "region",
+        "polar_region",
+        "location",
+    )
+
+    normalized["location"] = first_non_empty(
+        normalized,
+        "location",
+        "site",
+    )
+
+    normalized["station_name"] = first_non_empty(
+        normalized,
+        "station_name",
+        "station",
+    )
+
+    normalized["station_id"] = first_non_empty(
+        normalized,
+        "station_id",
+    )
+
+    normalized["expedition_id"] = first_non_empty(
+        normalized,
+        "expedition_id",
+    )
+
+    normalized["document_id"] = first_non_empty(
+        normalized,
+        "document_id",
+    )
+
+    normalized["research_focus"] = split_values(
+        normalized.get("research_focus")
+    )
+
+    normalized["overview"] = clean_text(
+        normalized.get("overview")
+    )
+
+    normalized["coordinates"] = clean_text(
+        normalized.get("coordinates")
+    )
+
+    normalized["established_year"] = clean_text(
+        normalized.get("established_year")
+    )
+
+    normalized["research_areas"] = split_values(
+        normalized.get("research_areas")
+    )
+
+    normalized["institutions"] = split_values(
+        normalized.get("institutions")
+    )
+
+    normalized["scientists"] = split_values(
+        normalized.get("scientists")
+    )
+
+    normalized["objectives"] = clean_text(
+        normalized.get("objectives")
+    )
+
+    normalized["description"] = clean_text(
+        normalized.get("description")
+    )
+
+    normalized["abstract"] = clean_text(
+        normalized.get("abstract")
+    )
+
+    normalized["content"] = clean_text(
+        normalized.get("content")
+    )
+
+    return normalized
+
+
+# ============================================================
+# RESULT NORMALIZATION
+# ============================================================
+
+def normalize_result(
+    result: Dict[str, Any]
+) -> Dict[str, Any]:
+
+    metadata = normalize_metadata(
+        result.get("metadata", {})
+    )
+
+    return {
+        "score": float(
+            result.get("score", 0)
+        ),
+        "content": clean_text(
+            result.get("content")
+        ),
+        "metadata": metadata,
+    }
+
+
+def normalize_results(
+    results: Any
+) -> List[Dict[str, Any]]:
+
+    if not results:
+        return []
+
+    normalized = []
+
+    for result in results:
+
+        if not isinstance(result, dict):
+            continue
+
+        normalized.append(
+            normalize_result(result)
+        )
+
+    normalized.sort(
+        key=lambda item: item.get("score", 0),
+        reverse=True,
+    )
+
+    return normalized
+
+
+# ============================================================
+# SOURCE TYPE
+# ============================================================
+
+def get_source_type(
+    result: Dict[str, Any]
+) -> str:
+
+    metadata = result.get(
+        "metadata",
+        {}
+    )
+
+    source = clean_text(
+        metadata.get("source")
+    ).lower()
+
+    aliases = {
+        "station": "stations",
+        "stations": "stations",
+
+        "expedition": "expeditions",
+        "expeditions": "expeditions",
+
+        "document": "documents",
+        "documents": "documents",
+
+        "media": "media",
+
+        "story": "stories",
+        "stories": "stories",
+
+        "ai_content": "ai_content",
+    }
+
+    return aliases.get(
+        source,
+        source
+    )
+
+
+# ============================================================
+# ENTITY SELECTION
+# ============================================================
+
+def get_entity_candidates(
+    results: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+
+    if not results:
+        return []
+
+    candidates = []
+
+    for result in results:
+
+        source_type = get_source_type(result)
+
+        if source_type in {
+            "stations",
+            "expeditions",
+            "documents",
+        }:
+            candidates.append(result)
+
+    return candidates
+
+
+def get_primary_entity(
+    results: List[Dict[str, Any]]
+) -> Optional[Dict[str, Any]]:
+
+    candidates = get_entity_candidates(results)
+
+    if not candidates:
+        return None
+
+    return candidates[0]
+
+
+# ============================================================
+# QUERY INTENT
+# ============================================================
+
+def is_expedition_query(
+    query: str
+) -> bool:
+
+    query_lower = clean_text(query).lower()
+
+    expedition_terms = [
+        "expedition",
+        "expeditions",
+        "indian arctic expedition",
+        "indian antarctic expedition",
+        "antarctic expedition",
+        "arctic expedition",
+    ]
+
     return any(
-        term in q
+        term in query_lower
         for term in expedition_terms
     )
 
 
-def _extract_expedition_number(query: str):
-    """
-    Extract an expedition number from a query.
+def is_expedition_objective_query(
+    query: str
+) -> bool:
 
-    Examples:
-        43rd -> 43
-        15th -> 15
-        42nd -> 42
-    """
+    query_lower = clean_text(query).lower()
 
-    match = re.search(
-        r"\b(\d+)(?:st|nd|rd|th)\b",
-        query.lower()
+    objective_terms = [
+        "objective",
+        "objectives",
+        "main objective",
+        "main objectives",
+        "purpose",
+        "aim",
+        "aims",
+        "goal",
+        "goals",
+        "what was the expedition about",
+        "what were they studying",
+        "what did the expedition study",
+    ]
+
+    return any(
+        term in query_lower
+        for term in objective_terms
     )
 
-    if match:
-        return match.group(1)
+
+def is_relationship_query(
+    query: str,
+    results: List[Dict[str, Any]],
+) -> bool:
+
+    query_lower = clean_text(query).lower()
+
+    relationship_terms = {
+        "associated",
+        "association",
+        "associated with",
+        "related",
+        "related to",
+        "linked",
+        "linked to",
+        "connected",
+        "connected to",
+        "belong",
+        "belongs to",
+        "part of",
+        "connection",
+        "relationship",
+        "relations",
+        "which expedition",
+        "which expeditions",
+        "which station",
+        "which stations",
+    }
+
+    return any(
+        term in query_lower
+        for term in relationship_terms
+    )
+
+
+# ============================================================
+# TEMPERATURE ML
+# ============================================================
+
+def is_temperature_prediction_query(
+    query: str
+) -> bool:
+
+    q = clean_text(query).lower()
+
+    has_station = bool(
+        re.search(
+            r"\b(?:maitri|bharati|himadri)\b",
+            q,
+        )
+    )
+
+    has_temperature = bool(
+        re.search(
+            r"\b(?:temperature|temp|thermal)\b",
+            q,
+        )
+    )
+
+    has_prediction_intent = bool(
+        re.search(
+            r"\b(?:"
+            r"predict(?:ed|ing|ion)?|"
+            r"forecast(?:s|ed|ing)?|"
+            r"estim(?:ate|ated|ating|ation)|"
+            r"expect(?:ed|ing)?|"
+            r"what\s+(?:will|would)"
+            r")\b",
+            q,
+        )
+    )
+
+    return (
+        has_station
+        and has_temperature
+        and has_prediction_intent
+    )
+
+
+def extract_temperature_station(
+    query: str
+) -> Optional[str]:
+
+    q = clean_text(query).lower()
+
+    match = re.search(
+        r"\b(maitri|bharati|himadri)\b",
+        q,
+    )
+
+    return match.group(1) if match else None
+
+
+def extract_number(
+    query: str,
+    patterns: List[str],
+) -> Optional[float]:
+
+    for pattern in patterns:
+
+        match = re.search(
+            pattern,
+            query,
+            re.IGNORECASE,
+        )
+
+        if match:
+
+            try:
+                return float(
+                    match.group(1)
+                )
+            except ValueError:
+                return None
 
     return None
 
 
-def _is_exact_expedition(details, query: str):
-    """
-    Check whether a retrieved record is the exact expedition
-    requested by the user.
+def parse_temperature_prediction(
+    query: str
+) -> Dict[str, Any]:
 
-    We rely only on the actual repository title/fields.
-    """
+    station = extract_temperature_station(query)
 
-    if (
-        details["source_type"].lower()
-        != "expeditions"
-    ):
-        return False
-
-    title = details["title"].lower()
-
-    query_lower = query.lower()
-
-    expedition_number = (
-        _extract_expedition_number(query)
+    ap = extract_number(
+        query,
+        [
+            r"(?:pressure|ap)\s*(?:is|=|:)?\s*(-?\d+(?:\.\d+)?)"
+        ],
     )
 
-    # ---------------------------------------------------------
-    # Exact expedition number
-    # ---------------------------------------------------------
-
-    if expedition_number:
-
-        pattern = (
-            rf"\b{re.escape(expedition_number)}"
-            rf"(?:st|nd|rd|th)\b"
-        )
-
-        return bool(
-            re.search(pattern, title)
-        )
-
-    # ---------------------------------------------------------
-    # Station-based expedition detection
-    # ---------------------------------------------------------
-
-    if "himadri" in query_lower:
-        return "himadri" in _expedition_record_text(details)
-
-    if "bharati" in query_lower:
-        return "bharati" in _expedition_record_text(details)
-
-    if "maitri" in query_lower:
-        return "maitri" in _expedition_record_text(details)
-
-    # ---------------------------------------------------------
-    # Region-based expedition detection
-    # ---------------------------------------------------------
-
-    if (
-        "arctic" in query_lower
-        and "arctic" in title
-    ):
-        return True
-
-    if (
-        "antarctic" in query_lower
-        and "antarctic" in title
-    ):
-        return True
-
-    return False
-
-
-def _expedition_record_text(details):
-    return " ".join(
-        str(value).lower()
-        for value in details["fields"].values()
+    rh = extract_number(
+        query,
+        [
+            r"(?:humidity|rh)\s*(?:is|=|:)?\s*(-?\d+(?:\.\d+)?)"
+        ],
     )
 
-
-# =============================================================
-# EXACT EXPEDITION ANSWER
-# =============================================================
-
-def generate_expedition_answer(
-    query: str,
-    expedition_details,
-):
-    """
-    Generate an answer directly from the exact structured
-    expedition record.
-
-    This deliberately avoids paraphrasing expedition names.
-    """
-
-    fields = expedition_details["fields"]
-
-    title = _clean_text(expedition_details["title"])
-
-    year = _clean_text(
-        fields.get(
-            "Year",
-            expedition_details["metadata"].get("year", ""),
-        )
+    ws = extract_number(
+        query,
+        [
+            r"(?:wind\s*speed|ws)\s*(?:is|=|:)?\s*(-?\d+(?:\.\d+)?)"
+        ],
     )
 
-    objectives = _objective_phrase(
-        fields.get("Objectives", expedition_details["objectives"])
+    wd = extract_number(
+        query,
+        [
+            r"(?:wind\s*direction|direction|wd)\s*(?:is|=|:)?\s*(-?\d+(?:\.\d+)?)"
+        ],
     )
 
-    research_areas = _research_areas(expedition_details)
+    date_time: Optional[datetime] = None
 
-    institutions = _split_values(
-        fields.get("Institutions", fields.get("Institution", ""))
+    date_time_match = re.search(
+        r"((?:\d{4}-\d{1,2}-\d{1,2}|"
+        r"\d{1,2}\s+(?:january|february|march|april|may|june|july|"
+        r"august|september|october|november|december)\s+\d{4})"
+        r"(?:[t\s]+)(?:at\s+)?"
+        r"(?:\d{1,2}:\d{2}(?:\s*(?:am|pm))?|"
+        r"\d{1,2}\s*(?:am|pm)))",
+        query,
+        re.IGNORECASE,
     )
 
-    scientists = _split_values(fields.get("Scientists", ""))
+    if date_time_match:
 
-    region = _clean_text(fields.get("Region", ""))
-    description = _clean_text(
-        fields.get("Description", expedition_details["description"])
-    )
+        date_text = date_time_match.group(1)
 
-    answer_parts = [title]
-    if year:
-        answer_parts.append(f"Year: {year}")
-    if region:
-        answer_parts.append(f"Region: {region}")
-    objective_section = _bullet_section(
-        "Objectives",
-        [objectives] if objectives else [],
-    )
-    if objective_section:
-        answer_parts.append(objective_section)
-    area_section = _bullet_section("Research areas", research_areas)
-    if area_section:
-        answer_parts.append(area_section)
-    institution_section = _bullet_section("Institutions", institutions)
-    if institution_section:
-        answer_parts.append(institution_section)
-    scientist_section = _bullet_section("Scientists", scientists)
-    if scientist_section:
-        answer_parts.append(scientist_section)
-    if description and description.rstrip(".").lower() not in (
-        objectives.lower(),
-        " ".join(research_areas).lower(),
-    ):
-        answer_parts.append(
-            f"Description:\n{description.rstrip('.')}."
-        )
+        try:
+            date_time = (
+                pd.to_datetime(
+                    date_text,
+                    errors="raise",
+                ).to_pydatetime()
+            )
 
-    excerpt = (
-        fields.get("Objectives", "")
-        or description
-        or ", ".join(research_areas)
-    )
-
-    source = {
-        "title": title,
-        "year": year,
-        "institution": institutions,
-        "type": fields.get(
-            "Type",
-            ""
-        ),
-        "source_type": (
-            expedition_details["source_type"]
-        ),
-        "excerpt": excerpt,
-    }
+        except (TypeError, ValueError):
+            date_time = None
 
     return {
-        "answer": "\n\n".join(answer_parts),
-        "sources": [source],
+        "station": station,
+        "date_time": date_time,
+        "ap": ap,
+        "rh": rh,
+        "ws": ws,
+        "wd": wd,
     }
 
 
-def _expedition_record_source(details):
-    fields = details["fields"]
-    return {
-        "title": details["title"],
-        "year": fields.get("Year", details["metadata"].get("year", "")),
-        "institution": fields.get(
-            "Institution",
-            fields.get("Institutions", ""),
-        ),
-        "type": fields.get("Type", ""),
-        "source_type": details["source_type"],
-        "excerpt": (
-            fields.get("Objectives", "")
-            or details["description"]
-            or details["research_areas"]
-        ),
-    }
+def generate_temperature_answer(
+    query: str
+) -> Dict[str, Any]:
 
+    parsed = parse_temperature_prediction(query)
 
-def generate_comparison_answer(query, expedition_records, requested_numbers):
-    records_by_number = {}
-    for details in expedition_records:
-        title = details["title"].lower()
-        for number in requested_numbers:
-            if re.search(rf"\b{re.escape(number)}(?:st|nd|rd|th)\b", title):
-                records_by_number[number] = details
+    station = parsed["station"]
+    date_time = parsed["date_time"]
+    ap = parsed["ap"]
+    rh = parsed["rh"]
+    ws = parsed["ws"]
+    wd = parsed["wd"]
 
-    if any(number not in records_by_number for number in requested_numbers):
+    if not station:
+
         return {
             "answer": (
-                "This information is not available in the POLAR knowledge repository."
+                "Temperature prediction is available for "
+                "Maitri, Bharati, and Himadri stations."
             ),
-            "sources": [
-                _expedition_record_source(details)
-                for details in records_by_number.values()
-            ],
+            "citations": [],
         }
 
-    answer_parts = []
-    comparison_facts = []
-    sources = []
+    missing = []
 
-    for number in requested_numbers:
-        details = records_by_number[number]
-        fields = details["fields"]
-        title = _clean_text(details["title"])
-        region = _clean_text(fields.get("Region", ""))
-        objectives = _objective_phrase(fields.get("Objectives", ""))
-        areas = _research_areas(details)
+    if date_time is None:
+        missing.append("date and time")
 
-        section = [title]
-        if region:
-            section.append(f"- Region: {region}")
-        if objectives:
-            section.append(f"- Objectives:\n  • {objectives}")
-        if areas:
-            section.append(
-                "- Research areas:\n"
-                + "\n".join(f"  • {area}" for area in areas)
-            )
-        answer_parts.append("\n".join(section))
-        sources.append(_expedition_record_source(details))
+    if ap is None:
+        missing.append("pressure (hPa)")
 
-    first = records_by_number[requested_numbers[0]]
-    second = records_by_number[requested_numbers[1]]
-    first_region = _clean_text(first["fields"].get("Region", ""))
-    second_region = _clean_text(second["fields"].get("Region", ""))
-    if first_region and second_region:
-        comparison_facts.append(
-            f"The records list their regions as {first_region} and {second_region}, respectively."
+    if rh is None:
+        missing.append("humidity (%)")
+
+    if ws is None:
+        missing.append("wind speed (m/s)")
+
+    if wd is None:
+        missing.append("wind direction (degrees)")
+
+    if missing:
+
+        missing_text = join_naturally(missing)
+
+        return {
+            "answer": (
+                f"To predict the temperature at "
+                f"**{station_display_name(station)}**, "
+                f"I need the following inputs: "
+                f"**{missing_text}**.\n\n"
+                "Example:\n\n"
+                "> Predict the temperature at Bharati "
+                "on 15 January 2026 at 12 PM, "
+                "pressure 980 hPa, humidity 70%, "
+                "wind speed 10 m/s, wind direction 180°."
+            ),
+            "citations": [],
+        }
+
+    try:
+
+        prediction = predict_temperature(
+            station=station,
+            date_time=date_time,
+            ap=ap,
+            rh=rh,
+            ws=ws,
+            wd=wd,
         )
 
-    first_areas = _research_areas(first)
-    second_areas = _research_areas(second)
-    if first_areas and second_areas:
-        comparison_facts.append(
-            "Recorded research areas are "
-            f"{_join_naturally(first_areas)} for {first['title']} and "
-            f"{_join_naturally(second_areas)} for {second['title']}."
+    except ValueError as exc:
+
+        return {
+            "answer": str(exc),
+            "citations": [],
+        }
+
+    except Exception as exc:
+
+        print(
+            "TEMPERATURE ML ERROR:",
+            repr(exc),
         )
-    first_objectives = _objective_phrase(
-        first["fields"].get("Objectives", "")
+
+        raise
+
+    station_name = station_display_name(station)
+
+    formatted_date = date_time.strftime(
+        "%d %B %Y"
     )
-    second_objectives = _objective_phrase(
-        second["fields"].get("Objectives", "")
-    )
-    if first_objectives and second_objectives:
-        comparison_facts.append(
-            "The recorded objectives are "
-            f"{first_objectives} for {first['title']} and "
-            f"{second_objectives} for {second['title']}."
-        )
 
-    if comparison_facts:
-        answer_parts.append(
-            "Comparison:\n" + "\n".join(
-                f"• {fact}" for fact in comparison_facts
-            )
-        )
+    formatted_time = date_time.strftime(
+        "%I:%M %p"
+    )
+
+    answer = (
+        f"### Temperature Prediction — {station_name}\n\n"
+        f"**Date:** {formatted_date}\n\n"
+        f"**Time:** {formatted_time}\n\n"
+        f"**Predicted Temperature:** "
+        f"**{prediction:.2f} °C**\n\n"
+        f"**Input Conditions:**\n"
+        f"- Pressure: {ap:.1f} hPa\n"
+        f"- Humidity: {rh:.1f}%\n"
+        f"- Wind Speed: {ws:.1f} m/s\n"
+        f"- Wind Direction: {wd:.1f}°"
+    )
 
     return {
-        "answer": "\n\n".join(answer_parts),
-        "sources": sources,
+        "answer": answer,
+        "citations": [],
     }
 
 
-def _is_document_query(query, results):
-    query_lower = query.lower()
-    document_intent = any(
-        term in query_lower
-        for term in ("dataset", "document", "publication", "paper", "study", "report")
-    ) or "what is" in query_lower and "about" in query_lower
-    return document_intent or bool(results) and all(
-        get_source_details(result)["source_type"].lower() == "documents"
+# ============================================================
+# EXPEDITION HELPERS
+# ============================================================
+
+def find_best_expedition(
+    results: List[Dict[str, Any]],
+    query: str,
+) -> Optional[Dict[str, Any]]:
+
+    expedition_results = [
+        result
         for result in results
-    )
-
-
-def _format_document_answer(details):
-    fields = details["fields"]
-    parts = [_clean_text(details["title"])]
-
-    document_type = _clean_text(fields.get("Type", ""))
-    year = _clean_text(
-        fields.get("Year", details["metadata"].get("year", ""))
-    )
-    institution = _clean_text(
-        fields.get("Institution", fields.get("Institutions", ""))
-    )
-    if document_type:
-        parts.append(f"Type: {document_type}")
-    if year:
-        parts.append(f"Year: {year}")
-    if institution:
-        parts.append(f"Institution: {institution}")
-
-    summary = _clean_text(
-        details["abstract"]
-        or details["description"]
-        or details["findings"]
-    )
-    if summary:
-        parts.append(f"Summary:\n{summary}")
-
-    topics = _research_areas(details)
-    topics_section = _bullet_section("Relevant topics", topics)
-    if topics_section:
-        parts.append(topics_section)
-
-    return "\n\n".join(parts)
-
-
-# =============================================================
-# MAIN ANSWER GENERATOR
-# =============================================================
-
-def generate_answer(
-    query: str,
-    results: list
-):
-
-    # =========================================================
-    # NO RESULTS
-    # =========================================================
-
-    if not results:
-        return {
-            "answer": (
-                "This information is not available in the POLAR knowledge repository."
-            ),
-            "sources": [],
-        }
-
-    query_lower = query.lower()
-
-    # =========================================================
-    # TOPICS
-    # =========================================================
-
-    specific_topics = [
-        "kongsfjorden",
-        "himadri",
-        "maitri",
-        "bharati",
-        "svalbard",
-        "schirmacher",
+        if get_source_type(result) == "expeditions"
     ]
 
-    region_topics = [
-        "antarctica",
-        "antarctic",
-        "arctic",
-        "southern ocean",
-    ]
+    if not expedition_results:
+        return None
 
-    # =========================================================
-    # REQUESTED TOPIC
-    # =========================================================
+    query_lower = clean_text(query).lower()
 
-    requested_specific_topic = next(
-        (
-            topic
-            for topic in specific_topics
-            if topic in query_lower
-        ),
-        None,
-    )
+    for result in expedition_results:
 
-    requested_region = next(
-        (
-            region
-            for region in region_topics
-            if region in query_lower
-        ),
-        None,
-    )
-
-    # =========================================================
-    # STATION CONTEXT
-    # =========================================================
-
-    station_contexts = {
-
-        "bharati": {
-            "region": "antarctica",
-
-            "region_terms": (
-                "antarctica",
-                "antarctic",
-                "southern ocean",
-                "schirmacher",
-            ),
-
-            "preferred_terms": (
-                "bharati",
-                "southern ocean",
-                "antarctic climate",
-                "oceanography",
-                "polar biology",
-                "ice",
-                "ecosystem",
-                "environmental observation",
-            ),
-
-            "other_stations": (
-                "himadri",
-                "maitri",
-                "schirmacher",
-            ),
-        },
-
-        "maitri": {
-            "region": "antarctica",
-
-            "region_terms": (
-                "antarctica",
-                "antarctic",
-                "southern ocean",
-                "schirmacher",
-            ),
-
-            "preferred_terms": (
-                "maitri",
-                "schirmacher oasis",
-                "antarctic lake",
-                "geology",
-                "ice core",
-                "paleoclimate",
-                "climate",
-                "antarctic ecosystem",
-            ),
-
-            "other_stations": (
-                "himadri",
-                "bharati",
-            ),
-        },
-
-        "himadri": {
-            "region": "arctic",
-
-            "region_terms": (
-                "arctic",
-                "svalbard",
-                "ny-ålesund",
-                "ny-Ã¥lesund",
-            ),
-
-            "preferred_terms": (
-                "himadri",
-                "svalbard",
-                "ny-ålesund",
-                "ny-Ã¥lesund",
-                "arctic climate",
-                "aerosol",
-                "atmosphere",
-                "glacier",
-                "permafrost",
-                "arctic ecosystem",
-                "fjord",
-            ),
-
-            "other_stations": (
-                "maitri",
-                "bharati",
-                "schirmacher",
-            ),
-        },
-    }
-
-    station_context = (
-        station_contexts.get(
-            requested_specific_topic
+        metadata = result.get(
+            "metadata",
+            {}
         )
+
+        title = first_non_empty(
+            metadata,
+            "title",
+            "name",
+        ).lower()
+
+        slug = clean_text(
+            metadata.get("slug")
+        ).lower()
+
+        if title and title in query_lower:
+            return result
+
+        if slug and slug in query_lower:
+            return result
+
+    return expedition_results[0]
+
+
+# ============================================================
+# STATION ANSWER
+# ============================================================
+
+def format_station_answer(
+    result: Dict[str, Any]
+) -> str:
+
+    metadata = result["metadata"]
+
+    name = first_non_empty(
+        metadata,
+        "name",
+        "title",
+        "station_name",
     )
-    asks_for_association = any(
-        term in query_lower
-        for term in ("associated", "linked", "related to")
+
+    location = first_non_empty(
+        metadata,
+        "location",
+        "site",
     )
 
-    # =========================================================
-    # SCORE RESULTS
-    # =========================================================
+    region = clean_text(
+        metadata.get("region")
+    )
 
-    scored_results = []
+    overview = first_non_empty(
+        metadata,
+        "overview",
+        "description",
+    )
 
-    for result in results:
+    research_focus = metadata.get(
+        "research_focus",
+        []
+    )
+
+    sections = []
+
+    if name:
+        sections.append(f"### {name}")
+
+    if location:
+        sections.append(
+            f"**Location:** {location}"
+        )
+
+    if region:
+        sections.append(
+            f"**Region:** {region}"
+        )
+
+    if research_focus:
+        sections.append(
+            "**Research Focus:** "
+            + join_naturally(research_focus)
+        )
+
+    if overview:
+        sections.append(
+            f"**Overview:** {overview}"
+        )
+
+    if not sections:
 
         content = result.get(
             "content",
             ""
         )
 
-        text = content.lower()
+        if content:
+            sections.append(content)
 
-        relevance = float(
-            result.get(
-                "score",
-                0
-            )
-        )
+    return "\n\n".join(sections)
 
-        # -----------------------------------------------------
-        # Requested station/topic
-        # -----------------------------------------------------
 
-        if requested_specific_topic:
+# ============================================================
+# EXPEDITION ANSWER
+# ============================================================
 
-            if requested_specific_topic in text:
-                relevance += 0.8
-            else:
-                relevance -= 0.25
+def format_expedition_answer(
+    result: Dict[str, Any]
+) -> str:
 
-        # -----------------------------------------------------
-        # Region
-        # -----------------------------------------------------
+    metadata = result["metadata"]
 
-        if requested_region:
-
-            if requested_region in text:
-                relevance += 0.3
-
-        # -----------------------------------------------------
-        # Research intent
-        # -----------------------------------------------------
-
-        if "research" in query_lower:
-
-            for term in [
-                "research",
-                "research areas",
-                "objectives",
-                "studies",
-                "study",
-                "scientific",
-            ]:
-
-                if term in text:
-                    relevance += 0.08
-
-        result["_relevance"] = relevance
-
-        scored_results.append(
-            result
-        )
-
-    # =========================================================
-    # SORT
-    # =========================================================
-
-    scored_results.sort(
-        key=lambda x: x["_relevance"],
-        reverse=True,
+    title = first_non_empty(
+        metadata,
+        "title",
+        "name",
     )
 
-    if not scored_results:
-        return {
-            "answer": (
-                "This information is not available in the POLAR knowledge repository."
-            ),
-            "sources": [],
-        }
-
-    best_result = scored_results[0]
-
-    requested_expedition_numbers = list(
-        dict.fromkeys(
-            re.findall(
-                r"\b(\d+)(?:st|nd|rd|th)\b",
-                query_lower,
-            )
-        )
-    )
-    is_expedition_comparison = (
-        len(requested_expedition_numbers) >= 2
-        and any(
-            term in query_lower
-            for term in ("compare", "comparison", "versus", " vs ")
-        )
+    year = metadata.get(
+        "year",
+        ""
     )
 
-    if is_expedition_comparison:
-        comparison_records = [
-            get_source_details(result)
-            for result in scored_results
-            if get_source_details(result)["source_type"].lower()
-            == "expeditions"
-            and any(
-                re.search(
-                    rf"\b{re.escape(number)}(?:st|nd|rd|th)\b",
-                    get_source_details(result)["title"].lower(),
-                )
-                for number in requested_expedition_numbers
-            )
-        ]
-        return generate_comparison_answer(
-            query,
-            comparison_records,
-            requested_expedition_numbers,
+    region = metadata.get(
+        "region",
+        ""
+    )
+
+    station_name = metadata.get(
+        "station_name",
+        ""
+    )
+
+    objectives = metadata.get(
+        "objectives",
+        ""
+    )
+
+    description = metadata.get(
+        "description",
+        ""
+    )
+
+    research_areas = metadata.get(
+        "research_areas",
+        []
+    )
+
+    institutions = metadata.get(
+        "institutions",
+        []
+    )
+
+    scientists = metadata.get(
+        "scientists",
+        []
+    )
+
+    sections = []
+
+    if title:
+
+        heading = title
+
+        if year:
+            heading += f" ({year})"
+
+        sections.append(
+            f"### {heading}"
         )
 
-    # =========================================================
-    # EXACT EXPEDITION HANDLING
-    #
-    # IMPORTANT:
-    # This is before station/general synthesis so that an
-    # expedition question uses the exact expedition record.
-    # =========================================================
+    if region:
+        sections.append(
+            f"**Region:** {region}"
+        )
 
-    has_expedition_identifier = bool(
-        _extract_expedition_number(query)
-    )
-    if (
-        _is_expedition_query(query)
-        and ("expedition" in query_lower or has_expedition_identifier)
-        and not (station_context and asks_for_association)
-    ):
+    if station_name:
+        sections.append(
+            f"**Station:** {station_name}"
+        )
 
-        expedition_records = []
+    if objectives:
+        sections.append(
+            f"**Objectives:** {objectives}"
+        )
 
-        for result in scored_results:
+    if description:
+        sections.append(
+            f"**Description:** {description}"
+        )
 
-            details = get_source_details(
-                result
-            )
+    if research_areas:
+        sections.append(
+            "**Research Areas:** "
+            + join_naturally(research_areas)
+        )
 
-            if _is_exact_expedition(
-                details,
-                query
-            ):
-                expedition_records.append(
-                    details
-                )
+    if institutions:
+        sections.append(
+            "**Institutions:** "
+            + join_naturally(institutions)
+        )
 
-        if expedition_records:
+    if scientists:
+        sections.append(
+            "**Scientists:** "
+            + join_naturally(scientists)
+        )
 
-            # Prefer the highest-scoring exact expedition
-            expedition_records.sort(
-                key=lambda details: next(
-                    (
-                        r.get(
-                            "_relevance",
-                            0
-                        )
-                        for r in scored_results
-                        if get_source_details(r)["title"]
-                        == details["title"]
-                    ),
-                    0,
-                ),
-                reverse=True,
-            )
+    if not sections:
 
-            return generate_expedition_answer(
-                query,
-                expedition_records[0],
-            )
-        return {
-            "answer": (
-                "This information is not available in the POLAR knowledge repository."
-            ),
-            "sources": [],
-        }
-
-    # =========================================================
-    # RELEVANCE PROTECTION
-    # =========================================================
-
-    MIN_RELEVANCE = 0.35
-
-    if (
-        best_result["_relevance"]
-        < MIN_RELEVANCE
-    ):
-
-        return {
-            "answer": (
-                "This information is not available in the POLAR knowledge repository."
-            ),
-            "sources": [],
-        }
-
-    # =========================================================
-    # SPECIFIC TOPIC MUST EXIST
-    # =========================================================
-
-    if requested_specific_topic:
-
-        best_text = best_result.get(
+        content = result.get(
             "content",
             ""
-        ).lower()
-
-        if (
-            requested_specific_topic
-            not in best_text
-        ):
-
-            return {
-                "answer": (
-                    "This information is not available in the POLAR knowledge repository."
-                ),
-                "sources": [],
-            }
-
-    # =========================================================
-    # SELECT RELEVANT SOURCES
-    # =========================================================
-
-    if station_context:
-
-        station_record = None
-
-        regional_records = []
-        target_region = (
-            station_context["region"]
         )
 
-        for result in scored_results:
+        if content:
+            sections.append(content)
 
-            details = get_source_details(
-                result
+    return "\n\n".join(sections)
+
+
+# ============================================================
+# DOCUMENT ANSWER
+# ============================================================
+
+def format_document_answer(
+    result: Dict[str, Any]
+) -> str:
+
+    metadata = result["metadata"]
+
+    title = first_non_empty(
+        metadata,
+        "title",
+        "name",
+    )
+
+    year = metadata.get(
+        "year",
+        ""
+    )
+
+    region = metadata.get(
+        "region",
+        ""
+    )
+
+    description = metadata.get(
+        "description",
+        ""
+    )
+
+    document_type = first_non_empty(
+        metadata,
+        "document_type",
+        "type",
+        "category",
+    )
+
+    institution = first_non_empty(
+        metadata,
+        "institution",
+        "organization",
+        "publisher",
+    )
+
+    abstract = metadata.get(
+        "abstract",
+        ""
+    )
+
+    content = result.get(
+        "content",
+        ""
+    )
+
+    sections = []
+
+    if title:
+
+        heading = title
+
+        if year:
+            heading += f" ({year})"
+
+        sections.append(
+            f"### {heading}"
+        )
+
+    if document_type:
+        sections.append(
+            f"**Type:** {document_type}"
+        )
+
+    if region:
+        sections.append(
+            f"**Region:** {region}"
+        )
+
+    if institution:
+        sections.append(
+            f"**Institution:** {institution}"
+        )
+
+    if abstract:
+        sections.append(
+            f"**Abstract:** {abstract}"
+        )
+
+    elif description:
+        sections.append(
+            f"**About:** {description}"
+        )
+
+    elif content:
+        sections.append(
+            f"**About:** {content}"
+        )
+
+    return "\n\n".join(sections)
+
+
+# ============================================================
+# GENERIC ANSWER
+# ============================================================
+
+def format_primary_answer(
+    result: Dict[str, Any]
+) -> str:
+
+    source_type = get_source_type(result)
+
+    if source_type == "stations":
+        return format_station_answer(result)
+
+    if source_type == "expeditions":
+        return format_expedition_answer(result)
+
+    if source_type == "documents":
+        return format_document_answer(result)
+
+    content = result.get(
+        "content",
+        ""
+    )
+
+    if content:
+        return content
+
+    metadata = result.get(
+        "metadata",
+        {}
+    )
+
+    title = first_non_empty(
+        metadata,
+        "title",
+        "name",
+    )
+
+    if title:
+        return f"### {title}"
+
+    return ""
+
+
+# ============================================================
+# STATION → EXPEDITION RELATIONSHIP
+# ============================================================
+
+def generate_station_relationship_answer(
+    station_result: Dict[str, Any]
+) -> Dict[str, Any]:
+
+    metadata = station_result.get(
+        "metadata",
+        {}
+    )
+
+    station_name = first_non_empty(
+        metadata,
+        "name",
+        "title",
+        "station_name",
+    )
+
+    station_id = first_non_empty(
+        metadata,
+        "station_id",
+    )
+
+    expeditions = get_expeditions_for_station(
+        station_id=station_id or None,
+        station_name=station_name or None,
+    )
+
+    answer_parts = []
+
+    station_text = format_station_answer(
+        station_result
+    )
+
+    if station_text:
+        answer_parts.append(station_text)
+
+    if expeditions:
+
+        answer_parts.append(
+            "### Related Expeditions"
+        )
+
+        for expedition in expeditions:
+
+            if not isinstance(
+                expedition,
+                dict
+            ):
+                continue
+
+            expedition_metadata = normalize_metadata(
+                expedition.get(
+                    "metadata",
+                    expedition,
+                )
             )
 
-            content = result.get(
-                "content",
+            title = first_non_empty(
+                expedition_metadata,
+                "title",
+                "name",
+            )
+
+            year = expedition_metadata.get(
+                "year",
                 ""
-            ).lower()
-
-            source_type = (
-                details["source_type"]
-                .lower()
             )
 
-            record_region = (
-                details["fields"].get(
-                    "Region",
-                    ""
-                )
-                or details["metadata"].get(
-                    "region",
-                    ""
-                )
-            ).lower()
-
-            # -------------------------------------------------
-            # Station record
-            # -------------------------------------------------
-
-            is_station_record = (
-                source_type == "stations"
-                and requested_specific_topic
-                in content
-            )
-
-            if is_station_record:
-                station_record = result
-                continue
-
-            if source_type == "stations":
-                continue
-
-            if (
-                asks_for_association
-                and source_type == "expeditions"
-                and requested_specific_topic not in content
-                and requested_specific_topic
-                not in details["fields"].get("Station", "").lower()
-            ):
-                continue
-
-            # -------------------------------------------------
-            # Ignore other station content
-            # -------------------------------------------------
-
-            if any(
-                other_station in content
-                for other_station
-                in station_context[
-                    "other_stations"
-                ]
-            ):
-                continue
-
-            def mentions_region(
-                text,
-                terms
-            ):
-                return any(
-                    re.search(
-                        rf"(?<!\w)"
-                        rf"{re.escape(term)}"
-                        rf"(?!\w)",
-                        text,
-                    )
-                    for term in terms
-                )
-
-            region_matches = (
-                target_region
-                in record_region
-                or (
-                    not record_region
-                    and mentions_region(
-                        content,
-                        station_context[
-                            "region_terms"
-                        ],
-                    )
-                )
-            )
-
-            opposite_region_terms = (
-                (
-                    "arctic",
-                    "svalbard",
-                    "ny-ålesund",
-                    "ny-Ã¥lesund",
-                )
-                if target_region
-                == "antarctica"
-                else (
-                    "antarctica",
-                    "antarctic",
-                    "southern ocean",
-                )
-            )
-
-            wrong_region = mentions_region(
-                record_region or content,
-                opposite_region_terms,
-            )
-
-            if (
-                region_matches
-                and not wrong_region
-            ):
-                regional_records.append(
-                    result
-                )
-
-        # -----------------------------------------------------
-        # Research priority
-        # -----------------------------------------------------
-
-        def research_priority(result):
-
-            details = get_source_details(
-                result
-            )
-
-            source_type = (
-                details["source_type"]
-                .lower()
-            )
-
-            text = (
-                result.get(
-                    "content",
-                    ""
-                )
-                + " "
-                + details["fields"].get(
-                    "Type",
-                    ""
-                )
-                + " "
-                + details["title"]
-            ).lower()
-
-            if source_type == "expeditions":
-
-                source_priority = 0
-
-            elif source_type == "documents":
-
-                if any(
-                    term in text
-                    for term in (
-                        "educational",
-                        "outreach",
-                        "curriculum",
-                    )
-                ):
-                    source_priority = 3
-
-                elif any(
-                    term in text
-                    for term in (
-                        "dataset",
-                        "data set",
-                    )
-                ):
-                    source_priority = 2
-
-                else:
-                    source_priority = 1
-
-            else:
-
-                source_priority = 4
-
-            target_match = (
-                requested_specific_topic
-                not in text
-            )
-
-            preferred_match_count = sum(
-                term in text
-                for term in station_context[
-                    "preferred_terms"
-                ]
-            )
-
-            return (
-                source_priority,
-                target_match,
-                -preferred_match_count,
-                -float(
-                    result.get(
-                        "_relevance",
-                        0
-                    )
-                ),
-            )
-
-        regional_records.sort(
-            key=research_priority
-        )
-
-        substantive_records = [
-            result
-            for result in regional_records
-            if not any(
-                term in (
-                    result.get(
-                        "content",
-                        ""
-                    )
-                    + " "
-                    + get_source_details(
-                        result
-                    )["title"]
-                ).lower()
-                for term in (
-                    "educational",
-                    "outreach",
-                    "curriculum",
-                )
-            )
-        ]
-
-        if len(substantive_records) >= 2:
-            regional_records = (
-                substantive_records
-            )
-
-        relevant_results = (
-            (
-                [station_record]
-                if station_record
-                else []
-            )
-            + regional_records[:4]
-        )
-
-    elif requested_specific_topic:
-
-        requested_antarctic_station = (
-            requested_specific_topic
-            in [
-                "bharati",
-                "maitri",
-                "schirmacher",
-            ]
-        )
-
-        requested_arctic_station = (
-            requested_specific_topic
-            in [
-                "himadri",
-                "kongsfjorden",
-                "svalbard",
-            ]
-        )
-
-        relevant_results = []
-
-        for result in scored_results:
-
-            content = result.get(
-                "content",
+            region = expedition_metadata.get(
+                "region",
                 ""
-            ).lower()
+            )
 
-            score = float(
+            line = title
+
+            if year:
+                line += f" ({year})"
+
+            if region:
+                line += f" — {region}"
+
+            if line:
+                answer_parts.append(
+                    f"- {line}"
+                )
+
+    return {
+        "answer": "\n\n".join(answer_parts),
+        "related_results": expeditions,
+    }
+
+
+# ============================================================
+# CITATIONS
+# ============================================================
+
+def make_citation(
+    result: Dict[str, Any]
+) -> Dict[str, Any]:
+
+    metadata = result.get(
+        "metadata",
+        {}
+    )
+
+    source_type = get_source_type(result)
+
+    title = first_non_empty(
+        metadata,
+        "title",
+        "name",
+    )
+
+    source_id = first_non_empty(
+        metadata,
+        "id",
+        "document_id",
+        "expedition_id",
+        "station_id",
+    )
+
+    slug = first_non_empty(
+        metadata,
+        "slug",
+    )
+
+    route = ""
+
+    if source_type == "stations":
+
+        if slug:
+            route = f"/explore/{slug}"
+
+        elif source_id:
+            route = f"/explore/{source_id}"
+
+    elif source_type == "expeditions":
+
+        if slug:
+            route = f"/expeditions/{slug}"
+
+        elif source_id:
+            route = f"/expeditions/{source_id}"
+
+    elif source_type == "documents":
+
+        if slug:
+            route = f"/knowledge/{slug}"
+
+        elif source_id:
+            route = f"/knowledge/{source_id}"
+
+    return {
+        "title": title or "POLAR Knowledge",
+        "source": source_type,
+        "route": route,
+        "score": round(
+            float(
                 result.get(
                     "score",
                     0
                 )
-            )
-
-            # -------------------------------------------------
-            # Exact requested topic
-            # -------------------------------------------------
-
-            if (
-                requested_specific_topic
-                in content
-            ):
-
-                relevant_results.append(
-                    result
-                )
-                continue
-
-            # -------------------------------------------------
-            # Antarctic station
-            # -------------------------------------------------
-
-            if requested_antarctic_station:
-
-                if (
-                    "antarctica" in content
-                    and score >= 0.25
-                ):
-
-                    relevant_results.append(
-                        result
-                    )
-
-            # -------------------------------------------------
-            # Arctic station
-            # -------------------------------------------------
-
-            elif requested_arctic_station:
-
-                if (
-                    (
-                        "arctic" in content
-                        or "svalbard" in content
-                    )
-                    and score >= 0.25
-                ):
-
-                    relevant_results.append(
-                        result
-                    )
-
-            if len(
-                relevant_results
-            ) >= 5:
-                break
-
-    else:
-
-        minimum_relevance = max(
-            0.2,
-            best_result["_relevance"]
-            - 0.45,
-        )
-
-        relevant_results = [
-            result
-            for result in scored_results
-            if result["_relevance"]
-            >= minimum_relevance
-        ][:5]
-
-        if (
-            best_result
-            not in relevant_results
-        ):
-
-            relevant_results.insert(
-                0,
-                best_result
-            )
-
-            relevant_results = (
-                relevant_results[:5]
-            )
-
-    # =========================================================
-    # LATEST RESEARCH FIRST
-    # =========================================================
-
-    if not station_context:
-
-        relevant_results.sort(
-            key=lambda result: (
-                get_year(result),
-                result.get(
-                    "_relevance",
-                    0
-                ),
             ),
-            reverse=True,
+            4,
+        ),
+    }
+
+
+def build_entity_citations(
+    primary: Dict[str, Any]
+) -> List[Dict[str, Any]]:
+
+    return [
+        make_citation(primary)
+    ]
+
+
+def build_relationship_citations(
+    station_result: Dict[str, Any],
+    related_results: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+
+    citations = [
+        make_citation(station_result)
+    ]
+
+    seen = {
+        (
+            citations[0]["source"],
+            citations[0]["title"],
+            citations[0]["route"],
         )
+    }
 
-    # =========================================================
-    # BUILD ANSWER
-    # =========================================================
+    for item in related_results:
 
-    answer_parts = []
+        if not isinstance(item, dict):
+            continue
 
-    # =========================================================
-    # STATION-SPECIFIC QUESTION
-    # =========================================================
+        if "metadata" in item:
 
-    if station_context:
-        station_record = next(
-            (
-                get_source_details(result)
-                for result in relevant_results
-                if get_source_details(result)["source_type"].lower()
-                == "stations"
-            ),
-            None,
-        )
-        research_records = [
-            get_source_details(result)
-            for result in relevant_results
-            if get_source_details(result)["source_type"].lower()
-            != "stations"
-        ]
+            normalized = normalize_result(item)
 
-        if not station_record:
-            answer_parts.append(
-                "This information is not available in the POLAR knowledge repository."
-            )
         else:
-            station_fields = station_record["fields"]
-            station_name = _clean_text(station_record["title"])
-            location = _clean_text(station_fields.get("Location", ""))
-            region = _clean_text(
-                station_fields.get(
-                    "Region",
-                    station_record["metadata"].get("region", ""),
-                )
-            )
-            station_areas = _research_areas(station_record)
 
-            answer_parts.append(station_name)
-            if location:
-                answer_parts.append(f"Location: {location}")
-            if region:
-                answer_parts.append(f"Region: {region}")
+            normalized = {
+                "score": 0,
+                "content": "",
+                "metadata": normalize_metadata(item),
+            }
 
-            main_areas = _bullet_section(
-                "Main research areas",
-                station_areas,
-            )
-            if main_areas:
-                answer_parts.append(main_areas)
+        citation = make_citation(normalized)
 
-            expeditions = [
-                details
-                for details in research_records
-                if details["source_type"].lower() == "expeditions"
-            ]
-            related_expeditions = _bullet_section(
-                "Related regional expeditions",
-                [
-                    _clean_text(details["title"])
-                    + (
-                        f" ({details['fields'].get('Year')})"
-                        if details["fields"].get("Year")
-                        else ""
-                    )
-                    for details in expeditions
-                ],
-            )
-            if related_expeditions:
-                answer_parts.append(related_expeditions)
-
-            relevant_research = []
-            for details in research_records:
-                title = _clean_text(details["title"])
-                record_kind = (
-                    "expedition"
-                    if details["source_type"].lower() == "expeditions"
-                    else "document"
-                )
-                areas = _research_areas(details)
-                objective = _objective_phrase(details["objectives"])
-                summary = _clean_text(
-                    details["abstract"]
-                    or details["description"]
-                    or details["findings"]
-                ).rstrip(".")
-                evidence = []
-                if areas:
-                    evidence.append(
-                        "Research areas: " + _join_naturally(areas)
-                    )
-                if objective:
-                    evidence.append("Objective: " + objective)
-                elif summary:
-                    evidence.append(summary)
-                if evidence:
-                    relevant_research.append(
-                        f"{title} ({record_kind} record) — "
-                        f"{'; '.join(evidence)}"
-                    )
-
-            research_section = _bullet_section(
-                "Relevant research in retrieved records",
-                relevant_research[:3],
-            )
-            if research_section:
-                answer_parts.append(research_section)
-            elif not station_areas and not related_expeditions:
-                answer_parts.append(
-                    "This information is not available in the POLAR knowledge repository."
-                )
-
-    # =========================================================
-    # DOCUMENT OR DATASET QUESTION
-    # =========================================================
-
-    elif _is_document_query(query, relevant_results):
-
-        document_records = [
-            get_source_details(result)
-            for result in relevant_results
-            if get_source_details(result)["source_type"].lower()
-            == "documents"
-        ]
-        answer_parts = [
-            _format_document_answer(details)
-            for details in document_records[:3]
-        ]
-
-        if not answer_parts:
-            answer_parts.append(
-                "This information is not available in the POLAR knowledge repository."
-            )
-
-    # =========================================================
-    # SPECIFIC TOPIC
-    # =========================================================
-
-    elif requested_specific_topic:
-
-        station_record = None
-
-        research_records = []
-
-        for result in relevant_results:
-
-            details = get_source_details(
-                result
-            )
-
-            text = result.get(
-                "content",
-                ""
-            ).lower()
-
-            if (
-                requested_specific_topic
-                in text
-            ):
-
-                if (
-                    "station"
-                    in details[
-                        "title"
-                    ].lower()
-                    or details[
-                        "source_type"
-                    ]
-                    == "stations"
-                ):
-
-                    station_record = (
-                        details
-                    )
-
-                else:
-
-                    research_records.append(
-                        details
-                    )
-
-        # -----------------------------------------------------
-        # Station overview
-        # -----------------------------------------------------
-
-        if station_record:
-
-            overview = (
-                station_record[
-                    "description"
-                ]
-                or station_record[
-                    "abstract"
-                ]
-                or station_record[
-                    "research_areas"
-                ]
-            )
-
-            if overview:
-
-                answer_parts.append(
-                    overview
-                )
-
-        # -----------------------------------------------------
-        # Research records
-        # -----------------------------------------------------
-
-        for details in research_records[:3]:
-
-            research_text = (
-                details[
-                    "abstract"
-                ]
-                or details[
-                    "description"
-                ]
-                or details[
-                    "findings"
-                ]
-                or details[
-                    "objectives"
-                ]
-                or details[
-                    "research_areas"
-                ]
-            )
-
-            if research_text:
-
-                answer_parts.append(
-                    f"{details['title']}: "
-                    f"{research_text}"
-                )
-
-    # =========================================================
-    # GENERAL QUESTION
-    # =========================================================
-
-    else:
-
-        for result in relevant_results[:4]:
-
-            details = get_source_details(
-                result
-            )
-
-            text = (
-                details[
-                    "abstract"
-                ]
-                or details[
-                    "description"
-                ]
-                or details[
-                    "findings"
-                ]
-                or details[
-                    "objectives"
-                ]
-                or details[
-                    "research_areas"
-                ]
-            )
-
-            if text:
-
-                answer_parts.append(
-                    f"{details['title']}: "
-                    f"{text}"
-                )
-
-    # =========================================================
-    # REMOVE DUPLICATES
-    # =========================================================
-
-    cleaned_parts = []
-
-    seen_text = set()
-
-    for part in answer_parts:
-
-        normalized = (
-            part.strip().lower()
+        key = (
+            citation["source"],
+            citation["title"],
+            citation["route"],
         )
 
-        if (
-            normalized
-            and normalized
-            not in seen_text
-        ):
+        if key in seen:
+            continue
 
-            seen_text.add(
-                normalized
+        seen.add(key)
+        citations.append(citation)
+
+    return citations
+
+
+# ============================================================
+# EXPEDITION-FOCUSED ANSWER
+# ============================================================
+
+def generate_expedition_focused_answer(
+    query: str,
+    results: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+
+    if not is_expedition_query(query):
+        return None
+
+    expedition = find_best_expedition(
+        results,
+        query,
+    )
+
+    if expedition is None:
+        return None
+
+    if is_expedition_objective_query(query):
+
+        metadata = expedition.get(
+            "metadata",
+            {}
+        )
+
+        objectives = clean_text(
+            metadata.get("objectives")
+        )
+
+        if objectives:
+
+            return {
+                "answer": format_expedition_answer(
+                    expedition
+                ),
+                "citations": [
+                    make_citation(expedition)
+                ],
+            }
+
+    return {
+        "answer": format_expedition_answer(
+            expedition
+        ),
+        "citations": [
+            make_citation(expedition)
+        ],
+    }
+
+
+# ============================================================
+# GENERIC ANSWER GENERATION
+# ============================================================
+
+def generate_answer(
+    query: str,
+    results: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+
+    results = normalize_results(results)
+
+    if not results:
+
+        return {
+            "answer": (
+                "I couldn't find relevant information "
+                "in the POLAR knowledge repository."
+            ),
+            "citations": [],
+        }
+
+    expedition_answer = (
+        generate_expedition_focused_answer(
+            query,
+            results,
+        )
+    )
+
+    if expedition_answer is not None:
+        return expedition_answer
+
+    primary = get_primary_entity(results)
+
+    if primary is None:
+        primary = results[0]
+
+    primary_source = get_source_type(primary)
+
+    if (
+        primary_source == "stations"
+        and is_relationship_query(
+            query,
+            results,
+        )
+    ):
+
+        relationship = (
+            generate_station_relationship_answer(
+                primary
             )
+        )
 
-            cleaned_parts.append(
-                _clean_text(part)
-            )
+        return {
+            "answer": relationship["answer"],
+            "citations": build_relationship_citations(
+                primary,
+                relationship["related_results"],
+            ),
+        }
 
-    # =========================================================
-    # FINAL ANSWER TEXT
-    # =========================================================
-
-    answer = "\n\n".join(cleaned_parts)
+    answer = format_primary_answer(primary)
 
     if not answer:
+
         answer = (
-            "This information is not available in the POLAR knowledge repository."
+            "I found relevant POLAR records, "
+            "but there isn't enough structured information "
+            "to generate a detailed answer."
         )
-
-    # =========================================================
-    # BUILD CITATIONS
-    # =========================================================
-
-    sources = []
-
-    seen_titles = set()
-
-    for result in relevant_results:
-
-        details = get_source_details(
-            result
-        )
-
-        title = (
-            details["title"]
-            .strip()
-        )
-
-        if not title:
-            continue
-
-        normalized_title = (
-            title.lower()
-        )
-
-        if (
-            normalized_title
-            in seen_titles
-        ):
-            continue
-
-        seen_titles.add(
-            normalized_title
-        )
-
-        excerpt = (
-            details["abstract"]
-            or details["description"]
-            or details["findings"]
-            or details["objectives"]
-            or details["research_areas"]
-            or ""
-        )
-
-        sources.append(
-            {
-                "title": title,
-
-                "year": details[
-                    "fields"
-                ].get(
-                    "Year",
-                    details[
-                        "metadata"
-                    ].get(
-                        "year",
-                        "",
-                    ),
-                ),
-
-                "institution": details[
-                    "fields"
-                ].get(
-                    "Institution",
-                    details[
-                        "fields"
-                    ].get(
-                        "Institutions",
-                        "",
-                    ),
-                ),
-
-                "type": details[
-                    "fields"
-                ].get(
-                    "Type",
-                    "",
-                ),
-
-                "source_type": details[
-                    "source_type"
-                ],
-
-                "excerpt": excerpt,
-            }
-        )
-
-    # =========================================================
-    # FINAL RETURN
-    # =========================================================
 
     return {
         "answer": answer,
-        "sources": sources,
+        "citations": build_entity_citations(
+            primary
+        ),
     }
 
 
-# =============================================================
-# POLAR AI API
-# =============================================================
+# ============================================================
+# OUTREACH CONTENT GENERATOR
+# ============================================================
 
-@app.get("/api/ask")
-def ask_polar(query: str):
-    expedition_numbers = re.findall(
-        r"\b\d+(?:st|nd|rd|th)\b",
-        query.lower(),
+def generate_outreach_content(
+    query: str,
+    audience: str,
+    platform: str,
+    result: Dict[str, Any],
+) -> str:
+
+    metadata = result.get(
+        "metadata",
+        {}
     )
-    is_comparison = (
-        len(expedition_numbers) >= 2
-        and any(
-            term in query.lower()
-            for term in ("compare", "comparison", "versus", " vs ")
+
+    source_type = get_source_type(result)
+
+    title = first_non_empty(
+        metadata,
+        "title",
+        "name",
+    )
+
+    year = clean_text(
+        metadata.get("year")
+    )
+
+    region = clean_text(
+        metadata.get("region")
+    )
+
+    description = first_non_empty(
+        metadata,
+        "description",
+        "overview",
+        "abstract",
+        "content",
+    )
+
+    objectives = clean_text(
+        metadata.get("objectives")
+    )
+
+    research_areas = metadata.get(
+        "research_areas",
+        []
+    )
+
+    research_focus = metadata.get(
+        "research_focus",
+        []
+    )
+
+    # --------------------------------------------------------
+    # VERIFIED FACTUAL CONTENT
+    # --------------------------------------------------------
+
+    if source_type == "expeditions":
+
+        source_text = []
+
+        if title:
+            source_text.append(title)
+
+        if year:
+            source_text.append(f"({year})")
+
+        if region:
+            source_text.append(
+                f"was conducted in the {region} region."
+            )
+
+        if objectives:
+            source_text.append(
+                f"Its objectives included {objectives}."
+            )
+
+        if research_areas:
+            source_text.append(
+                "The expedition covered "
+                + join_naturally(research_areas)
+                + "."
+            )
+
+        if description:
+            source_text.append(description)
+
+        factual_content = " ".join(source_text)
+
+    elif source_type == "stations":
+
+        source_text = []
+
+        if title:
+            source_text.append(
+                f"{title} is a polar research station."
+            )
+
+        if region:
+            source_text.append(
+                f"It is located in {region}."
+            )
+
+        if research_focus:
+            source_text.append(
+                "Its research focuses on "
+                + join_naturally(research_focus)
+                + "."
+            )
+
+        if description:
+            source_text.append(description)
+
+        factual_content = " ".join(source_text)
+
+    else:
+
+        factual_content = description
+
+    if not factual_content:
+
+        factual_content = result.get(
+            "content",
+            ""
         )
+
+    factual_content = clean_text(
+        factual_content
     )
 
-    results = search_knowledge(
-        query,
-        top_k=None if is_comparison else 10,
+    if not factual_content:
+
+        factual_content = (
+            "This resource is available in the "
+            "POLAR Knowledge Repository."
+        )
+
+    # --------------------------------------------------------
+    # AUDIENCE
+    # --------------------------------------------------------
+
+    audience_key = clean_text(
+        audience
+    ).lower()
+
+    if audience_key == "student":
+
+        introduction = (
+            f"Learn about {title or 'this polar science resource'} "
+            "through this simple overview."
+        )
+
+    elif audience_key == "researcher":
+
+        introduction = (
+            f"Scientific overview of "
+            f"{title or 'the selected polar resource'}."
+        )
+
+    elif audience_key == "educator":
+
+        introduction = (
+            f"An educational overview of "
+            f"{title or 'this polar science resource'}."
+        )
+
+    else:
+
+        introduction = (
+            f"Discover the science behind "
+            f"{title or 'this polar research resource'}."
+        )
+
+    # --------------------------------------------------------
+    # PLATFORM
+    # --------------------------------------------------------
+
+    platform_key = clean_text(
+        platform
+    ).lower()
+
+    if platform_key == "website":
+
+        return (
+            f"## {title or 'Polar Science Resource'}\n\n"
+            f"{introduction}\n\n"
+            f"{factual_content}\n\n"
+            "**Source:** POLAR Knowledge Repository"
+        )
+
+    if platform_key == "instagram":
+
+        hashtags = (
+            "#PolarScience "
+            "#Antarctica "
+            "#ArcticResearch "
+            "#NCPOR"
+        )
+
+        return (
+            f"🧊 **{title or 'Polar Science'}**\n\n"
+            f"{introduction}\n\n"
+            f"{factual_content}\n\n"
+            f"{hashtags}"
+        )
+
+    if platform_key == "linkedin":
+
+        return (
+            f"### {title or 'Polar Research'}\n\n"
+            f"{introduction}\n\n"
+            f"{factual_content}\n\n"
+            "Polar research helps improve our understanding "
+            "of Earth's changing environments.\n\n"
+            "#PolarScience #PolarResearch #NCPOR"
+        )
+
+    if platform_key in {"x", "twitter"}:
+
+        return (
+            f"🧊 {title or 'Polar Research'}\n\n"
+            f"{factual_content}\n\n"
+            "#PolarScience #PolarResearch #NCPOR"
+        )
+
+    raise ValueError(
+        "Unsupported platform. Choose Website, Instagram, LinkedIn, or X."
     )
 
-    generated = generate_answer(
-        query,
-        results,
-    )
-    response_results = results
-    if is_comparison:
-        source_titles = {
-            source["title"].strip().lower()
-            for source in generated["sources"]
-        }
-        response_results = [
-            result
-            for result in results
-            if get_source_details(result)["title"].strip().lower()
-            in source_titles
-        ]
+
+# ============================================================
+# REQUEST MODELS
+# ============================================================
+
+class AskRequest(BaseModel):
+    query: str
+
+
+class ContentGenerationRequest(BaseModel):
+    query: str
+    audience: str = "public"
+    platform: str = "website"
+
+
+# ============================================================
+# ROOT + HEALTH
+# ============================================================
+
+@app.get("/")
+def root():
 
     return {
-        "query": query,
-        "answer": generated[
-            "answer"
-        ],
-        "sources": generated[
-            "sources"
-        ],
-        "results": response_results,
+        "name": "POLAR AI",
+        "status": "running",
+        "version": "2.4.0",
     }
+
+
+@app.get("/health")
+def health():
+
+    return {
+        "status": "healthy",
+    }
+
+
+# ============================================================
+# EXISTING RAG API
+# ============================================================
+
+@app.post("/api/ask")
+def ask_polar_ai(
+    request: AskRequest
+):
+
+    query = clean_text(
+        request.query
+    )
+
+    if not query:
+
+        raise HTTPException(
+            status_code=400,
+            detail="Query cannot be empty.",
+        )
+
+    try:
+
+        # ----------------------------------------------------
+        # TEMPERATURE ML
+        # ----------------------------------------------------
+
+        if is_temperature_prediction_query(query):
+
+            response = generate_temperature_answer(
+                query
+            )
+
+            return {
+                "query": query,
+                "answer": response["answer"],
+                "citations": response["citations"],
+            }
+
+        # ----------------------------------------------------
+        # RAG
+        # ----------------------------------------------------
+
+        results = search_knowledge(
+            query,
+            top_k=10
+        )
+
+        # ----------------------------------------------------
+        # RELEVANCE GATE
+        # ----------------------------------------------------
+
+        if (
+            not results
+            or results[0].get("score", 0) < 0.40
+        ):
+
+            return {
+                "query": query,
+                "answer": (
+                    "I couldn't find anything related to your question "
+                    "in the POLAR knowledge base."
+                ),
+                "citations": [],
+            }
+
+        # ----------------------------------------------------
+        # GROUNDED ANSWER
+        # ----------------------------------------------------
+
+        response = generate_answer(
+            query,
+            results,
+        )
+
+        return {
+            "query": query,
+            "answer": response["answer"],
+            "citations": response["citations"],
+        }
+
+    except Exception as exc:
+
+        print(
+            "POLAR AI ERROR:",
+            repr(exc),
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "POLAR AI failed while processing "
+                "the request."
+            ),
+        )
+
+
+# ============================================================
+# OUTREACH CONTENT GENERATION API
+# ============================================================
+
+@app.post("/api/generate-content")
+def generate_content(
+    request: ContentGenerationRequest
+):
+
+    query = clean_text(
+        request.query
+    )
+
+    audience = clean_text(
+        request.audience
+    )
+
+    platform = clean_text(
+        request.platform
+    )
+
+    if not query:
+
+        raise HTTPException(
+            status_code=400,
+            detail="Query cannot be empty.",
+        )
+
+    try:
+
+        # ----------------------------------------------------
+        # RETRIEVE VERIFIED POLAR KNOWLEDGE
+        # ----------------------------------------------------
+
+        results = search_knowledge(
+            query,
+            top_k=10
+        )
+
+        # ----------------------------------------------------
+        # SAME RELEVANCE GATE
+        # ----------------------------------------------------
+
+        if (
+            not results
+            or results[0].get("score", 0) < 0.40
+        ):
+
+            return {
+                "query": query,
+                "audience": audience,
+                "platform": platform,
+                "content": (
+                    "I couldn't find anything related to your "
+                    "request in the POLAR knowledge base."
+                ),
+                "citations": [],
+            }
+
+        # ----------------------------------------------------
+        # NORMALIZE
+        # ----------------------------------------------------
+
+        normalized_results = normalize_results(
+            results
+        )
+
+        # ----------------------------------------------------
+        # PRIMARY ENTITY
+        # ----------------------------------------------------
+
+        primary = get_primary_entity(
+            normalized_results
+        )
+
+        if primary is None:
+            primary = normalized_results[0]
+
+        # ----------------------------------------------------
+        # GENERATE CONTENT
+        # ----------------------------------------------------
+
+        content = generate_outreach_content(
+            query=query,
+            audience=audience,
+            platform=platform,
+            result=primary,
+        )
+
+        # ----------------------------------------------------
+        # RESPONSE
+        # ----------------------------------------------------
+
+        return {
+            "query": query,
+            "audience": audience,
+            "platform": platform,
+            "content": content,
+            "citations": [
+                make_citation(primary)
+            ],
+        }
+
+    except ValueError as exc:
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        )
+
+    except Exception as exc:
+
+        print(
+            "CONTENT GENERATION ERROR:",
+            repr(exc),
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "POLAR content generation failed "
+                "while processing the request."
+            ),
+        )
+
+
+# ============================================================
+# LOCAL DEVELOPMENT
+# ============================================================
+
+if __name__ == "__main__":
+
+    import uvicorn
+
+    uvicorn.run(
+        "backend.main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=False,
+    )
